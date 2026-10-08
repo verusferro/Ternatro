@@ -60,7 +60,8 @@ def start_bakes(session, ctx, snap, game, state):
     def bg_job(name, boss):
         try:
             ln = (ctx.W ** 2 + ctx.H ** 2) ** .5  # background.fs's grid: 700 cells along the diagonal, one px per cell
-            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, size=(round(700 * ctx.W / ln), round(700 * ctx.H / ln))))
+            # the 4th item collects the tiles' blob ids as the loop sends them
+            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, size=(round(700 * ctx.W / ln), round(700 * ctx.H / ln))), [])
         except Exception as e:  # keep the CSS swirl
             state["err"] = repr(e)
 
@@ -75,10 +76,14 @@ def start_bakes(session, ctx, snap, game, state):
         threading.Thread(target=run, daemon=True).start()
     nxt = getattr(ctx, "bg_next", None)
     if nxt is not None and (nxt[0], nxt[1]) == state.get("bg"):
+        tiles, ids = nxt[2], nxt[3]
+        if len(ids) < len(tiles):  # one tile per loop: a state's tiles are megabytes, at once they would stall a frame
+            t = tiles[len(ids)]
+            ids.append(session.blob(t[1], t[2]))
+            return
         ctx.bg_next = None
-        tiles = nxt[2]
         W, H = tiles[-1][5], tiles[-1][6]
-        ctx.bg = [session.blob(t[1], t[2]) for t in tiles]
+        ctx.bg = ids
         ctx.bg_css = "".join(  # percent of the stage, a hair of overlap so no seam shows between tiles
             f".bgt{i}{{left:{t[3] / W * 100:.4f}%;top:{t[4] / H * 100:.4f}%;width:{(t[5] - t[3]) / W * 100 + .02:.4f}%;"
             f"height:{(t[6] - t[4]) / H * 100 + .02:.4f}%}}" for i, t in enumerate(tiles))
