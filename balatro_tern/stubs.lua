@@ -234,6 +234,7 @@ end
 
 local function card_t(c)
   local ctr = c.config.center
+  local back = G.GAME[c.back or 'selected_back']  -- a Back: the run's deck, or the deck the New Run screen shows
   local st = {}
   if c.ability.eternal then st[#st+1] = 'eternal' end
   if c.ability.perishable then st[#st+1] = 'perishable' end
@@ -251,6 +252,7 @@ local function card_t(c)
     highlighted=c.highlighted and true or false, debuff=c.debuff and true or false, facing=c.facing or 'front',
     cost=c.cost or 0, sell=c.sell_cost or 0, name=card_name(c),
     atlas=ctr.atlas or ((ctr.set == 'Joker' or ctr.consumeable or ctr.set == 'Voucher') and ctr.set) or 'centers', pos=xy(ctr.pos), soul_pos=xy(ctr.soul_pos), front_atlas=fa, front_pos=fp,
+    back_pos=xy(back and back.pos),
   }
 end
 function BT.card_json(c) return json(card_t(c)) end  -- scene.lua: cards drawn inside tips

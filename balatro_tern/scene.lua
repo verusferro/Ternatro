@@ -176,6 +176,8 @@ local function emit(e, S, Fo, vis_parent, ctrl)
       if c.object.is and c.object:is(UIBox) and c.object.states.visible and vis then ctrl.nested[#ctrl.nested + 1] = c.object end
       return vis
     end
+    -- Sprite:draw skips a hidden sprite: create_toggle keeps its check mark in the tree, hidden while the toggle is off
+    if c.object.is and c.object:is(Sprite) and not c.object.states.visible then vis = false end
   end
   local fill, hover, emb, embcol, shx, shy, shcol, outw, outcol, rad = '', 0, 0, '', 0, 0, '', 0, '', 0
   if kind ~= UIT_O then

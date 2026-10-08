@@ -15,8 +15,10 @@ local function rgb(c) return fmt('%02x%02x%02x', math.floor(c[1] * 255 + .5), ma
 
 local function card_sig(c)
   local b = c.base
+  local bk = c.sprite_facing == 'back' and G.GAME[c.back] and G.GAME[c.back].pos  -- the New Run screen's deck changes in place
   return (c.config.center_key or '?') .. '.' .. (b and (b.suit or '') .. (b.value or '') or '') .. '.' ..
-    (c.edition and c.edition.type or '') .. '.' .. (c.seal or '') .. '.' .. (c.debuff and 'd' or '') .. ((c.dissolve or 0) > 0.005 and 'x' or '') .. (c.ability and (tostring(c.ability.perma_bonus) .. tostring(c.ability.mult) .. tostring(c.ability.x_mult) .. tostring(c.ability.t_mult) .. tostring(c.ability.t_chips) .. (type(c.ability.extra) == 'number' and tostring(c.ability.extra) or '')) or '')
+    (c.edition and c.edition.type or '') .. '.' .. (c.seal or '') .. '.' .. (c.debuff and 'd' or '') .. ((c.dissolve or 0) > 0.005 and 'x' or '') .. (c.ability and (tostring(c.ability.perma_bonus) .. tostring(c.ability.mult) .. tostring(c.ability.x_mult) .. tostring(c.ability.t_mult) .. tostring(c.ability.t_chips) .. (type(c.ability.extra) == 'number' and tostring(c.ability.extra) or '')) or '') ..
+    (bk and ('.' .. bk.x .. ',' .. bk.y) or '')
 end
 
 local function emit_card(o, name, a, i, c)
@@ -68,8 +70,8 @@ function BT.frame()
   for _, c in pairs(G.I.CARD) do  -- Jimbo (win screen) and any other card that lives outside a CardArea
     if not c.REMOVED and c.states.visible and (c.jimbo or (G.OVERLAY_MENU and c.area and not named_areas[c.area])) then
       local vt = c.VT
-      o[#o + 1] = fmt('c\t%d\tmisc\t1\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\tf\t0\t%.3f\t%s', c.sort_id, vt.x, vt.y,
-        vt.w, vt.h, vt.r, vt.scale, math.abs(c.dissolve or 0), card_sig(c))
+      o[#o + 1] = fmt('c\t%d\tmisc\t1\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%s\t0\t%.3f\t%s', c.sort_id, vt.x, vt.y,
+        vt.w, vt.h, vt.r, vt.scale, c.sprite_facing == 'back' and 'b' or 'f', math.abs(c.dissolve or 0), card_sig(c))
     end
   end
   local cf, mf = G.ARGS.chip_flames, G.ARGS.mult_flames
