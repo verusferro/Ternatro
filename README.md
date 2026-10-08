@@ -9,19 +9,35 @@ Play Balatro in a [Tern](https://docs.stencil.so/tern) pane. The game's own Lua 
 - [Tern](https://docs.stencil.so/tern) desktop 0.6.2 or later (Windows, macOS or Linux).
 - [uv](https://docs.astral.sh/uv/). It fetches Python 3.12 and the dependencies itself.
 - Your own copy of Balatro (1.0.1o tested). Only `Balatro.exe` is needed (on macOS: `Balatro.app/Contents/Resources/Balatro.love`). There is no Steam auto-detect: give `setup` the path.
-- Linux sound needs PortAudio (`libportaudio2`). Windows and macOS need nothing extra. Windows (native, uv + Python 3.12 from uv, WASAPI sound, about 80 ms, in Tern) is tested; macOS is untested at this revision. The palette commands on native Windows are untested; `uv run` in a pane is tested. On Windows, a freshly installed `uv` is on `PATH` only for terminals (and a Tern window) started afterwards: restart Tern before using the plugin.
+- Linux sound needs PortAudio (`libportaudio2`). Windows and macOS need nothing extra. Windows (native, uv + Python 3.12 from uv, WASAPI sound, about 80 ms, in Tern) is tested; on macOS a contributor has played it with the LuaJIT lupa below. The palette commands on native Windows are untested; `uv run` in a pane is tested. On Windows, a freshly installed `uv` is on `PATH` only for terminals (and a Tern window) started afterwards: restart Tern before using the plugin.
+- macOS also needs a `lupa` built with LuaJIT and the Xcode command line tools (`xcode-select --install`): see [macOS: lupa with LuaJIT](#macos-lupa-with-luajit).
 
 ## Install
 
 The same on Windows, macOS and Linux (run in any terminal; `<repo>` is wherever you cloned this):
 
 ```sh
-git clone https://github.com/kerem-ozdemir/Ternatro <repo>
+git clone https://github.com/verusferro/Ternatro <repo>
 uv run --project <repo> balatro-tern setup /path/to/Balatro.exe   # default: <repo>/Balatro/Balatro.exe
 tern plugin link <repo>/plugin                         # Windows: tern.exe plugin link <repo>\plugin
 ```
 
 `setup` unpacks the game's code and art from `Balatro.exe` into `<repo>/extracted`. The game refuses to start until you've run it. The plugin adds **Balatro: New Run** and **Balatro: Continue** to the palette, and the ante and money to the status line (the pane title is `Balatro: Ante n · $x`). If the commands don't show up, run **Reload plugins**. `tern plugin list` should show `balatro … window ready`. Keep the plugin linked rather than installed: it finds the repo relative to itself.
+
+### macOS: lupa with LuaJIT
+
+The game needs LuaJIT (`lupa.luajit21`). lupa's macOS wheels on PyPI don't include it: lupa's `setup.py` skips LuaJIT on macOS. Until lupa ships it, build lupa yourself after `setup` (LuaJIT 2.1 builds and runs on Apple Silicon and Intel):
+
+```sh
+cd <repo>
+curl -L https://files.pythonhosted.org/packages/source/l/lupa/lupa-2.8.tar.gz | tar xz
+sed -i '' "/platform == 'darwin' and 'luajit'/d" lupa-2.8/setup.py   # drop the macOS LuaJIT skip
+uv build --wheel --python 3.12 -o lupa-wheel lupa-2.8
+uv pip install --reinstall --no-index --find-links lupa-wheel lupa==2.8
+rm -rf lupa-2.8 lupa-wheel
+```
+
+Install it from `--find-links` like this, not from the `.whl` path: uv treats a package installed from a file path as a different source and puts the PyPI lupa back on the next `uv run`. The version must match `uv.lock` (2.8 now); after an update that changes lupa's version, do this again with the new version.
 
 ### Optional: Windows Tern with the game in WSL
 
