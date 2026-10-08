@@ -288,7 +288,7 @@ class Scene:
         self._blobs = {}
         self.gl = glyphs.Glyphs(session)
         self._sent = {}  # sheet name -> css
-        self._kf = {}  # keyframes name -> @keyframes css (DynaText float / bump), all in the `sckf` sheet
+        self._kf = {}  # keyframes name -> @keyframes css (DynaText float / bump), copied into each box sheet that uses it
         self._tips = {}  # (card id, sig) -> (node, css)
         self._uitips = {}  # uie id -> (node, css)
         self._tipimg = {}  # tip content -> (blob, class, css): see _tip_from
@@ -477,10 +477,11 @@ class Scene:
                     # then) and again once it is removed: a node that reaches Tern before / after its rules would sit
                     # unstyled at the stage's top-left in the inherited font size
                     part += f".sb{b.id}{{visibility:visible}}"
-                sheets[f"sc{b.id}_{k}" if k else f"sc{b.id}"] = part
-        live = {"scshake", "sckf"} | sheets.keys()
-        # keyframes go out before the boxes that use them
-        for name, css in [("sckf", "".join(self._kf.values()))] + list(sheets.items()):
+                # Tern scopes @keyframes to their own stylesheet: a sheet carries the keyframes its rules use
+                kf = "".join(v for name, v in self._kf.items() if name in part)
+                sheets[f"sc{b.id}_{k}" if k else f"sc{b.id}"] = kf + part
+        live = {"scshake"} | sheets.keys()
+        for name, css in sheets.items():
             if self._sent.get(name) != css:
                 self._sent[name] = css
                 sf.stylesheet(name, css)
@@ -652,7 +653,7 @@ class Scene:
     def _bob(self, mode, rate, amp):
         """(keyframes name, period s, phase per letter) for text.lua's float (amp*sin) or bump
         (amp*max(0,(5+rate)*sin - 3 - rate)) as a `translate` on the letter.  Float is sampled every 15 degrees, bump
-        17 times across the part above 0.  Keyframes go to the shared `sckf` sheet."""
+        17 times across the part above 0.  Keyframes go into the box sheets that use them (Scene.update)."""
         name = f"bt-{mode}{round(rate * 1000)}-{round(amp * 1000)}"
         if name not in self._kf:
             if mode == "f":
