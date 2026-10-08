@@ -1,6 +1,7 @@
 """Lua bridge: runs the unmodified Balatro Lua (LuaJIT via lupa) headless behind love.* stubs (stubs.lua)."""
 import json
 import os
+import random
 import sys
 import time
 from functools import lru_cache
@@ -49,6 +50,7 @@ class Game:
         g.PYMKDIR = lambda p: os.makedirs(p, exist_ok=True)
         g.PYFONTW = lambda f, n, t: _font(f, n).getlength(t)
         g.PYFONTH = lambda f, n: sum(_font(f, n).getmetrics())
+        g.PYRANDOM = random.random
         lua.execute((HERE / "stubs.lua").read_text())
         self.G = g.G
         self.BT = g.BT

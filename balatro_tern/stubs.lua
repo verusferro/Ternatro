@@ -1,5 +1,5 @@
 -- love.* stubs + Balatro bridge (module `BT`). Loaded by game.py after it sets the Lua globals
--- ROOT (game dir, trailing /), DATA (save dir, trailing /), PYLS(path), PYSTAT(path), PYMKDIR(path).
+-- ROOT (game dir, trailing /), DATA (save dir, trailing /), PYLS(path), PYSTAT(path), PYMKDIR(path), PYRANDOM() ([0, 1)).
 package.path = ROOT..'?.lua;'..package.path
 local stub
 stub = setmetatable({}, {__index=function() return stub end, __call=function() return stub end})
@@ -166,6 +166,19 @@ end
 function BT.busy()
   if not G.GAME or G.STAGE ~= G.STAGES.RUN then return false end
   return (G.CONTROLLER.locked and true) or (G.screenwipe and true) or ((G.GAME.STOP_USE or 0) > 0) or qlen_blocking() or false
+end
+
+-- generate_starting_seed() draws its entropy from the cursor (Controller:set_cursor_hover: G.CURSOR.T and
+-- G.TIMERS.TOTAL). Here the cursor never moves and the clock advances in fixed 1/60 s ticks, so every launch rolled
+-- the same seed: shift the cursor's time by a random amount for the roll.
+local o_starting_seed = generate_starting_seed
+function generate_starting_seed()
+  local h = G.CONTROLLER.cursor_hover
+  local t = h.time
+  h.time = t + PYRANDOM() * 1e6
+  local seed = o_starting_seed()
+  h.time = t
+  return seed
 end
 
 -- ===== new / continue =====
