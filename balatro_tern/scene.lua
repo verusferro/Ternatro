@@ -72,14 +72,19 @@ local function object_info(e, obj)
     local letters, per = st.letters, {}
     -- float / bump (text.lua update_text) are pure functions of G.TIMERS.REAL with phase 200*i per letter: send their
     -- rate and amplitude once and let Tern run them (scene.py keyframes) instead of a new offset every frame.
-    -- Only while nothing else (quiver, pulse, a letter's scale) feeds the offset.
+    -- Only while nothing else (a quivering text, a running pulse) feeds the offset, scale or tilt.  The game stops a
+    -- quiver with set_quiver(0) and leaves the table set, and text.lua never clears config.pulse once it has run (a
+    -- pulse shows as scaled letters): the flags alone would stream the HUD's floating chips / mult digits every
+    -- frame for the rest of the run.
+    local scaled = false
+    for _, l in ipairs(letters) do if math.abs((l.scale or 1) - 1) > 1e-3 then scaled = true; break end end
+    local quiver = obj.config.quiver and (obj.config.quiver.amount or 0) ~= 0
     local mode, rate, amp, wob = '', 0, 0, ''
-    if not G.SETTINGS.reduced_motion and not obj.config.quiver and not obj.config.pulse then
+    if not G.SETTINGS.reduced_motion and not quiver and not scaled then
       if obj.config.bump then
         mode, rate, amp = 'b', obj.bump_rate, obj.bump_amount * math.sqrt(sc) * 7
       elseif obj.config.float then
         mode, rate, amp = 'f', 2.666, math.sqrt(sc) * k * 2000
-        for _, l in ipairs(letters) do if math.abs((l.scale or 1) - 1) > 1e-3 then mode = '' end end
       end
       -- rotate: letter.r = static tilt + 0.02*sin(2*REAL + i), the sine likewise left to Tern
       if obj.config.rotate then wob = obj.config.rotate == 2 and '-1' or '1' end
@@ -224,6 +229,7 @@ end
 
 -- ===== particles (engine/particles.lua): rotated squares at offset, `scale` wide, colour * (1 - fade_alpha) =====
 -- One element per emitter with a pool of `n` slots (high-water mark, so births/deaths don't rebuild nodes).
+-- (Placed per frame: as Tern CSS animations each particle would cost Tern a compositing pass every frame.)
 local function is_particles(v) return getmetatable(v) == Particles end
 local function emit_particles(p, S, Fo, vis)
   local live = 0

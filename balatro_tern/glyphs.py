@@ -1,16 +1,18 @@
 """The game's pixel font (m6x11plus) as images.
 
-Tern draws only system-installed fonts and plugins cannot load any, so every glyph is a white PNG cut from the real
-TTF at its native 16 px (the game loads it at 200 px = 12.5x: same pixels, no anti-aliasing). Sizes are in em
-(1em = the font's line = ascent 12 + descent 4 = the game's text `scale`); tinted by a color-matrix filter.
+Tern draws only system-installed fonts and plugins cannot load any, so every glyph is a PNG cut from the real TTF at
+its native 16 px (the game loads it at 200 px = 12.5x: same pixels, no anti-aliasing). Sizes are in em (1em = the
+font's line = ascent 12 + descent 4 = the game's text `scale`).
+
+The colour is baked into the image: a CSS `filter` would cost Tern an offscreen render pass per filtered element, and
+with every text and DynaText letter tinted that was ~500 passes a frame.  `tint` (a color-matrix filter over a white
+image) is kept for the rare text whose colour keeps changing (scene.py).
 
 Static text is one image per string (`text_node`; the font has no kerning, so a whole string is laid out as LOVE's Text
-does), tinted by a filter on its container.  DynaText places its letters itself (`gl l<k>`, scene.py), since each letter
-moves on its own.
+does).  DynaText places its letters itself (`gl l<k>`, scene.py), since each letter moves on its own.
 
     g = Glyphs(session)
-    node = ui.html.div(g.text_node(text), class_="... scf s7")
-    css  = f".s7{{filter:{tint('fe5f55')}}}"
+    node = ui.html.div(g.text_node(text, "fe5f55"), class_="... scf s7")
 """
 import io
 from functools import lru_cache
@@ -36,23 +38,31 @@ def advance(text):
 
 
 @lru_cache(maxsize=None)
-def png(ch):
-    """(PNG bytes, image width px) of one white glyph, drawn PAD px in from the left at the line's top."""
+def png(ch, col=""):
+    """(PNG bytes, image width px) of one glyph in colour `col` (rrggbb[aa], '' = white), drawn PAD px in from the left
+    at the line's top."""
     f = _font()
     x0, _, x1, _ = f.getbbox(ch)
     w = max(int(round(f.getlength(ch))), x1) + PAD + max(PAD, -x0)
-    im = Image.new("RGBA", (w, N), (0, 0, 0, 0))
-    ImageDraw.Draw(im).text((PAD, 0), ch, font=f, fill=(255, 255, 255, 255))
-    b = io.BytesIO()
-    im.save(b, "PNG", optimize=True)
-    return b.getvalue(), w
+    r, g, b, a = _rgba(col)
+    m = Image.new("L", (w, N), 0)
+    ImageDraw.Draw(m).text((PAD, 0), ch, font=f, fill=a)
+    im = Image.new("RGBA", m.size, (r, g, b, 0))
+    im.putalpha(m)
+    out = io.BytesIO()
+    im.save(out, "PNG", optimize=True)
+    return out.getvalue(), w
+
+
+def _rgba(col):
+    r, g, b = (int(col[i:i + 2], 16) for i in (0, 2, 4)) if col else (255, 255, 255)
+    return r, g, b, int(col[6:8], 16) if len(col) >= 8 else 255
 
 
 @lru_cache(maxsize=2048)
 def text_im(text, col):
     """`text` as one native-resolution RGBA image in colour `col` (rrggbb[aa], '' = white), drawn PAD px in from the left like png()."""
-    r, g, b = (int(col[i:i + 2], 16) for i in (0, 2, 4)) if col else (255, 255, 255)
-    a = int(col[6:8], 16) if len(col) >= 8 else 255
+    r, g, b, a = _rgba(col)
     m = Image.new("L", (int(advance(text)) + 2 * PAD, N), 0)
     ImageDraw.Draw(m).text((PAD, 0), text, font=_font(), fill=a)
     im = Image.new("RGBA", m.size, (r, g, b, 0))
@@ -61,28 +71,31 @@ def text_im(text, col):
 
 
 class Glyphs:
-    """Blob ids of the glyphs sent on one session (each glyph is sent once)."""
+    """Blob ids of the glyph / text images sent on one session (each (text, colour) is sent once)."""
 
     def __init__(self, session):
         self.session, self.ids = session, {}
 
-    def blob(self, ch):
-        b = self.ids.get(ch)
+    def blob(self, ch, col=""):
+        key = (ch, col, 1)
+        b = self.ids.get(key)
         if b is None:
-            b = self.ids[ch] = self.session.blob(png(ch)[0], "image/png")
+            b = self.ids[key] = self.session.blob(png(ch, col)[0], "image/png")
         return b
 
-    def text_node(self, text):
-        """One image of a whole static text (white, tinted by a filter on its container): 1em = N px tall, PAD px of room left."""
-        b = self.ids.get(text)
-        if b is None:  # ponytail: one blob per distinct string for the session; LRU if a long run's strings add up
+    def text_node(self, text, col=""):
+        """One image of a whole static text in colour `col` ('' = white): 1em = N px tall, PAD px of room left."""
+        key = (text, col, 0)
+        b = self.ids.get(key)
+        if b is None:  # ponytail: one blob per distinct (string, colour) for the session; LRU if a long run's strings add up
             out = io.BytesIO()
-            text_im(text, "").save(out, "PNG", optimize=True)
-            b = self.ids[text] = self.session.blob(out.getvalue(), "image/png")
+            text_im(text, col).save(out, "PNG", optimize=True)
+            b = self.ids[key] = self.session.blob(out.getvalue(), "image/png")
         return ui.image(b, alt="")
 
-    def nodes(self, text):
-        return [ui.html.div(ui.image(self.blob(ch), alt=""), class_=f"gl l{k}", key=f"l{k}")
+    def nodes(self, text, cols=("",)):
+        """One image per letter (`gl l<k>`, k = index in `text`), letter k in colour cols[k % len(cols)]."""
+        return [ui.html.div(ui.image(self.blob(ch, cols[k % len(cols)]), alt=""), class_=f"gl l{k}", key=f"l{k}")
                 for k, ch in enumerate(text) if not ch.isspace()]
 
 

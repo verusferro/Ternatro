@@ -1,6 +1,6 @@
 /* Scene (owner: Scene): static rules; per-UIBox geometry/colours come from the `sc<boxid>` sheets (scene.py). */
 .scroot, .scbox { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
-.scbox { visibility: hidden; }  /* shown by the box's own sheet (`.sb<id>`, scene.py box_css) */
+.scbox { visibility: hidden; }  /* shown by the box's own (last) sheet (`.sb<id>`, scene.py update) */
 .sce { position: absolute; margin: 0; padding: 0; box-sizing: border-box; pointer-events: none; }
 /* text = images of the game's font (glyphs.py): 1em = the text's line.  Static text (.scf) is one image per string;
    DynaText letters are placed per letter (.l<k> rules) */
