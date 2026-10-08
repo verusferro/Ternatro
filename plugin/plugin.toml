@@ -1,0 +1,7 @@
+schema = 1
+id = "balatro"
+name = "Balatro"
+version = "0.1.0"
+description = "Play Balatro in a Tern tab."
+icon = "sparkle"
+window = "window.luau"

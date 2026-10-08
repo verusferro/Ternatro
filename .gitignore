@@ -1,0 +1,14 @@
+Balatro/
+extracted/
+.venv/
+__pycache__/
+*.Zone.Identifier
+*:Zone.Identifier
+
+# agent / personal files (kept locally, not published)
+CHANGES.log
+Balatro on Tern*.md
+notes/
+spike/
+.DS_Store
+*.log

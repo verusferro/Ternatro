@@ -1,0 +1,20 @@
+/* table motion + sidebar skin (owner: Motion). Sizes live in view.layout_css (em: 1em = one game unit); per-frame
+   transforms in motion.build_sheet. */
+.room { font-family: m6x11plus, monospace; color: #fff; }
+/* cards: .mc carries the game's VT transform (per-frame rule); .sh the shadow; .ci hover + edition */
+.mc { z-index: 1; }
+.sh { filter: drop-shadow(0 5px 0 rgb(0 0 0 / 30%)); }
+.ci { transition: transform 160ms spring(240ms, .4); cursor: pointer; }
+.ci:hover { transform: scale(1.06) rotate(-1.5deg); }
+.ci .sf-image { image-rendering: pixelated; object-fit: fill; }
+/* tooltips: shown by real mouse hover (CSS :hover on the card box) */
+.mc:hover { z-index: 20; }
+.room.ovl .mc:hover { z-index: 1; }  /* an open overlay menu stays on top (Game:draw) */
+.room.ovl .mc.ovc:hover { z-index: 13; }  /* ...but a card inside the overlay (deck view) stays above its panel */
+.flimg { image-rendering: pixelated; }
+.scfl .sf-image { width: 100%; height: 100%; }
+/* z order: table cards < Scene's card-attached boxes / overlay menus < cards that live inside an overlay < hovered card */
+.scl-c, .scl-t, .scl-o, .scl-p { z-index: 10; }
+.mc.ovc { z-index: 12; }
+.scunder { z-index: 0; }
+.scover { z-index: 10; }
