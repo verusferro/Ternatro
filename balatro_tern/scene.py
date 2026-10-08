@@ -69,7 +69,7 @@ def sprite_blob(path, cw, ch, x, y, frames):
 
 
 class El:
-    __slots__ = ("id", "kind", "bid", "text", "shadow", "vert", "obj", "f", "tip", "raw", "css", "ck", "col")
+    __slots__ = ("id", "kind", "bid", "text", "shadow", "vert", "obj", "f", "tip", "raw", "css", "ck", "col", "anim", "t0")
 
     def __init__(self, f):
         self.id, self.kind, self.bid, self.text, self.shadow, self.vert = int(f[1]), f[2], int(f[3]), f[4], f[5] == "1", f[6] == "1"
@@ -77,7 +77,8 @@ class El:
         self.tip = len(f) > 8 and f[8] == "u"
         self.f = self.raw = None  # this frame's F row (split / as sent)
         self.css = self.ck = None  # el_css cache and what it was computed from
-        self.col = None  # colour baked into a static text's node (T)
+        self.col = None  # colour(s) baked into a text's node: T its colour, DynaText its letters' (F field 18)
+        self.anim, self.t0 = None, 0.0  # DynaText: animation names on its node and G.TIMERS.REAL when they started
 
 
 class Box:
@@ -169,13 +170,23 @@ def _paint_text(cv, text, col, left, top, fs, P, ox, oy, pivot=None):
         cv.alpha_composite(im, pos)
 
 
+def _dyna_ex(e):
+    """A DynaText's F extra fields (scene.lua object_info), padded."""
+    return e.f[17].split("\x04")[-1].split("\x03") + [""] * 19
+
+
+def _col(e):
+    """The colour(s) a text element shows this frame: T its colour, DynaText its letters' colours."""
+    return e.f[8] if e.kind == "T" else _dyna_ex(e)[18]
+
+
 def _paint_dyna(cv, e, P, ox, oy):
     """DynaText still, as _dyna_css lays it out (float / bump / wobble are not part of a still)."""
     o = e.obj
-    ex = e.f[17].split("\x04")[-1].split("\x03") + [""] * 18
+    ex = _dyna_ex(e)
     x, y, w, h, vs, vr = _f(ex[0]), _f(ex[1]), _f(ex[2]), _f(ex[3]), _f(ex[4]) or 1.0, _f(ex[5])
     per = [tuple(map(float, p.split(","))) for p in ex[8].split(";")] if ex[8] else []
-    texts, cols_all, shcol, sc = o[1].split("\5"), o[2].split("\5"), o[3], _f(o[4])
+    texts, cols_all, shcol, sc = o[1].split("\5"), ex[18].split("\5"), o[3], _f(o[4])
     j = int(_f(ex[17]))
     text, cols = texts[j], cols_all[j].split(",")
     N, TH = glyphs.N, 0.83
@@ -292,12 +303,13 @@ class Scene:
         self._tips = {}  # (card id, sig) -> (node, css)
         self._uitips = {}  # uie id -> (node, css)
         self._tipimg = {}  # tip content -> (blob, class, css): see _tip_from
+        self.tip_px = TIP_PX  # tip raster px per game unit: set_tip_px follows the pane's size
         self.flame_content = {}  # "c" | "m" -> callable() -> node: the flame image (Shaders)
-        # static texts bake their colour into the image (glyphs.py); one whose colour keeps changing is rebuilt the first
-        # few times, then drawn white + tint filter for good (its id joins _tint) so it never rebuilds the tree each frame
-        self._flips = {}  # T element id -> colour changes seen
+        # texts bake their colour into the image (glyphs.py); one whose colour keeps changing (G.C.EDITION) is rebuilt the
+        # first few times, then drawn white + tint filter for good (its id joins _tint) so it never rebuilds each frame
+        self._flips = {}  # text element id -> colour changes seen
         self._tint = set()
-        self._texts = []  # (box, El) of every T element, per structure
+        self._texts = []  # (box, El) of every T / DynaText element, per structure
         self._by_card = {}  # card sort_id -> its 'f' boxes, per structure
 
     def set_mute(self, music_muted, sfx_muted):
@@ -309,6 +321,17 @@ class Scene:
         """Debug: 'win' | 'over' | 'options' (BALATRO_DEBUG tokens); the game builds the real screen."""
         self.SC.force(what)
 
+    def set_tip_px(self, upx):
+        """Re-bake the hover tips for a pane of ~`upx` px per game unit: 2x that (Tern reports CSS px; covers a 2x
+        display), in buckets of 16 so a drag-resize doesn't re-bake every step.  Tips rebuild on the next render."""
+        px = int(min(256, max(64, 16 * round(2 * upx / 16))))
+        if px != self.tip_px:
+            self.tip_px = px
+            self._tips.clear(), self._uitips.clear(), self._tipimg.clear()
+            for b in self.boxes:
+                b.node = None
+            self.key += 1
+
     # ------------------------------------------------------------------ read
     def read(self):
         S, F = self.SC.frame()
@@ -317,7 +340,7 @@ class Scene:
             self._S = S
             self.key += 1
             self.boxes = self._parse_structure(S)
-            self._texts = [(b, e) for b in self.boxes for e in b.els if e.kind == "T"]
+            self._texts = [(b, e) for b in self.boxes for e in b.els if e.kind == "T" or (e.obj and e.obj[0] == "D")]
             self._by_card = {}
             for b in self.boxes:
                 if b.layer == "f" and b.card is not None:
@@ -327,7 +350,7 @@ class Scene:
         self._F = F
         self._apply_frame(self.boxes, F)
         for b, e in self._texts:
-            if e.col is not None and e.f[8] != e.col and e.id not in self._tint:  # its node shows another colour: rebuild
+            if e.col is not None and _col(e) != e.col and e.id not in self._tint:  # its node shows another colour: rebuild
                 n = self._flips[e.id] = self._flips.get(e.id, 0) + 1
                 if n >= 3:
                     self._tint.add(e.id)
@@ -403,7 +426,9 @@ class Scene:
             col = "" if e.id in self._tint else e.col  # white + tint filter (_text_css) once its colour proved unsteady
             return ui.html.div(self.gl.text_node(e.text, col), class_=" ".join(cls + ["scx", "scf"]), key=key, **kw)
         if o and o[0] == "D":
-            return ui.html.div(*self._dyna_glyphs(o[1], o[2]), class_=" ".join(cls + ["scx"]), key=key, **kw)
+            e.col, e.anim, e.ck = _col(e), None, None  # a new node restarts its animations: el_css re-times them
+            colss = "" if e.id in self._tint else e.col  # white + per-letter tint filter once its colours proved unsteady
+            return ui.html.div(*self._dyna_glyphs(o[1], colss), class_=" ".join(cls + ["scx"]), key=key, **kw)
         if o and o[0] == "S":
             name, x, y, frames = o[1], int(float(o[2])), int(float(o[3])), int(float(o[4]))
             if name not in self.atlas:
@@ -478,7 +503,7 @@ class Scene:
                     # unstyled at the stage's top-left in the inherited font size
                     part += f".sb{b.id}{{visibility:visible}}"
                 # Tern scopes @keyframes to their own stylesheet: a sheet carries the keyframes its rules use
-                kf = "".join(v for name, v in self._kf.items() if name in part)
+                kf = "".join(v for name, v in self._kf.items() if f"{name} " in part)  # "animation:<name> <dur>s ..."
                 sheets[f"sc{b.id}_{k}" if k else f"sc{b.id}"] = kf + part
         live = {"scshake"} | sheets.keys()
         for name, css in sheets.items():
@@ -607,16 +632,21 @@ class Scene:
         pop-in, super-juice) about its centre; the shadow copy keeps the letters' x offset and rotation but not their
         bob or juice.  The whole text is scaled/rotated by the object's VT about its centre (prep_draw).
         Float / bump run in Tern as keyframes (`_bob`), so a floating text's rules don't change every frame."""
-        ex = e.f[17].split("\x04")[-1].split("\x03") + [""] * 16
+        ex = _dyna_ex(e)
         x, y, w, h, vs, vr = _f(ex[0]), _f(ex[1]), _f(ex[2]), _f(ex[3]), _f(ex[4]) or 1.0, _f(ex[5])
         ox, oy = _f(ex[6]), _f(ex[7])
         per = [tuple(map(float, p.split(","))) for p in ex[8].split(";")] if ex[8] else []
         texts, shcol, sc = o[1].split("\5"), o[3], _f(o[4])
         j = int(_f(ex[17]))  # the focused string (cycling DynaText): its group shows, the others stay hidden
-        text = texts[j]  # its letters' colours are in their images (_dyna_glyphs)
+        text = texts[j]  # its letters' colours are in their images (_dyna_glyphs), or a filter once tinted
+        colss = ex[18].split("\5")
+        tints = (colss[j].split(",") if j < len(colss) else [""]) if e.id in self._tint else None
         U, N, TH = u.U, glyphs.N, 0.83  # TH: TEXT_HEIGHT_SCALE of G.FONTS[1] (game.lua:969)
         bob = self._bob(ex[13], _f(ex[14]), _f(ex[15])) if ex[13] else None
         wob = self._wob(_f(ex[16])) if ex[16] else None
+        anim = (bob and bob[0], wob and wob[0])
+        if anim != e.anim:  # Tern starts an animation when it applies: phase it to the game's clock from then
+            e.anim, e.t0 = anim, float(self.game.G.TIMERS.REAL)
 
         def text_rule(sel, dx, dy, shadow):
             k = 1 / max(sc * U, 1e-4)  # this element's em is the text scale: room lengths * k
@@ -640,7 +670,10 @@ class Scene:
                     anims = [a for a in (None if shadow else bob, wob) if a]
                     if anims:  # text.lua phases: rate*REAL + 200*i (bob), 2*REAL + i (wobble), i 1-based
                         ld.append("animation:" + ",".join(f"{a[0]} {a[1]:.4f}s linear infinite" for a in anims))
-                        ld.append("animation-delay:" + ",".join(f"{-((a[2] * (k + 1)) % TAU) / TAU * a[1]:.4f}s" for a in anims))
+                        ld.append("animation-delay:" + ",".join(
+                            f"{-((TAU / a[1] * e.t0 + a[2] * (k + 1)) % TAU) / TAU * a[1]:.4f}s" for a in anims))
+                    if tints and not shadow and tints[k % len(tints)]:
+                        ld.append(f"filter:{glyphs.tint(tints[k % len(tints)])}")
                     out.append(f"{sel} .g{j} .l{k}{{{';'.join(ld)}}}")
                 cum += wem
             return "".join(out)
@@ -710,10 +743,10 @@ class Scene:
         self._apply_frame(boxes, F)
         els = boxes[0].els
         cards = [l.split("\t") for l in K.split("\n") if l]
-        ck = (U, K, tuple((e.kind, e.text, e.shadow, tuple(e.obj or ()), tuple(e.f[1:])) for e in els))
+        ck = (U, self.tip_px, K, tuple((e.kind, e.text, e.shadow, tuple(e.obj or ()), tuple(e.f[1:])) for e in els))
         hit = self._tipimg.get(ck)
         if hit is None:
-            r = raster_tip(els, TIP_PX, self._sprite_im, cards)
+            r = raster_tip(els, self.tip_px, self._sprite_im, cards)
             if r is None:
                 hit = (None, "", "")
             else:

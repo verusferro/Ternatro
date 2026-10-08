@@ -37,7 +37,7 @@ def advance(text):
     return _font().getlength(text)
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=4096)
 def png(ch, col=""):
     """(PNG bytes, image width px) of one glyph in colour `col` (rrggbb[aa], '' = white), drawn PAD px in from the left
     at the line's top."""

@@ -98,8 +98,8 @@ local function object_info(e, obj)
       per[i] = fmt('%.4f,%.4f,%.4f,%.3f,%.3f,%.3f', l.dims.x * k / sc, -0.5 * off.x * k / sc, -0.5 * oy * k / sc,
         r, p * (l.scale or 1), p)
     end
-    -- every string is in the structure (text + colours per string: cycling strings only change `focused`, the node tree
-    -- stays), the per-letter frame data is the focused string's
+    -- every string is in the structure (the node tree stays when a cycling DynaText changes `focused`); the letters'
+    -- colours go with the frame (F field 18), since some animate (G.C.EDITION, DARK_EDITION) and must not rebuild the tree
     local texts, colss = {}, {}
     for j, s in ipairs(obj.strings) do
       local cs, same = {}, true
@@ -119,10 +119,10 @@ local function object_info(e, obj)
     local pn = math.sqrt(px * px + py * py)
     local nx, ny = pn > 0 and px / pn * k or 0, pn > 0 and py / pn * k or 0
     local vt = obj_vt(e, obj)
-    local desc = table.concat({'D', table.concat(texts, '\5'), table.concat(colss, '\5'), sh, f3(sc), '0'}, '\3')
+    local desc = table.concat({'D', table.concat(texts, '\5'), '', sh, f3(sc), '0'}, '\3')
     return desc, table.concat({f3(vt.x), f3(vt.y), f3(vt.w), f3(vt.h), f3(vt.scale), f3(vt.r), f3(ox), f3(oy), table.concat(per, ';'),
       f3(-px * sc / G.TILESIZE), f3(-py * sc / G.TILESIZE), fmt('%.4f', nx), fmt('%.4f', ny), mode, fmt('%.4f', rate), fmt('%.4f', -0.5 * amp * k / sc), wob,
-      obj.focused_string - 1}, '\3')
+      obj.focused_string - 1, table.concat(colss, '\5')}, '\3')
   end
   if e.config.id == 'flame_chips' or e.config.id == 'flame_mult' then
     -- flame_handler: a 2.5 x 2.5 Sprite aligned 'bmi' (bottom-middle inside) to the chips / mult box, drawn with flame.fs

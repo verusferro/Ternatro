@@ -82,6 +82,8 @@ class Ctx:
             self.rows = 40
         cw, ch = getattr(cell, "w", None) or 10, getattr(cell, "h", None) or 19
         self.Upx = max(20.0, min(self.cols * cw / self.W, self.rows * ch / self.H))
+        if self.scene:
+            self.scene.set_tip_px(self.Upx)
         self.dirty = True
 
     @property
