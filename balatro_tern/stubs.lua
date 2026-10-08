@@ -301,7 +301,8 @@ local PACKS = {'TAROT_PACK', 'PLANET_PACK', 'SPECTRAL_PACK', 'STANDARD_PACK', 'B
 local function in_pack() return in_state(unpack(PACKS)) end
 
 function BT.snapshot()
-  if not G.GAME or G.STAGE ~= G.STAGES.RUN then
+  -- no areas: no run, or the tick between Game:delete_run and Game:start_run (G.FUNCS.start_run queues them as two events)
+  if not G.GAME or G.STAGE ~= G.STAGES.RUN or not G.hand then
     return json{state='MENU', won=false, seed=NULL, busy=false, overlay=false, hud=NULL, areas=obj{}, blind_choices={}, shop=NULL, can={play=false, discard=false}}
   end
   local g, cr = G.GAME, G.GAME.current_round
