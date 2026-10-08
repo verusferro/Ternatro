@@ -36,6 +36,11 @@ class Game:
         self.data_dir = Path(data_dir).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         lua = self.lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+        # LuaJIT's default JIT budget (1000 traces, 64 KiB code areas, 2 MiB in all) is far too small for the game (it
+        # keeps 4000+ traces): every time it runs out, LuaJIT flushes ALL compiled code and starts over, and after a
+        # while of play that happened hundreds of times a second ("failed to allocate mcode memory"), leaving the game
+        # in the interpreter (~12x slower update, most of a CPU core).
+        lua.execute("jit.opt.start('maxtrace=8000', 'sizemcode=256', 'maxmcode=65536')")
         g = lua.globals()
         g.ROOT = str(Path(root)) + "/"
         g.DATA = str(self.data_dir) + "/"
