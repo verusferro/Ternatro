@@ -32,11 +32,46 @@ function IN.find(kind, id)
   end
 end
 
--- point the (virtual) mouse at a node's centre; returns false when the node is gone
+-- Where to put the (virtual) mouse to click node n: a point of n where the game's own hit test (G.DRAW_HASH,
+-- topmost first, Controller:set_cursor_hover's rule) lands on n or a child of it.  The centre first
+-- (Node:put_focused_cursor), else the nearest such point of a grid over n: a button that peeks out from behind its
+-- card (a pack card's USE, a consumable's USE / SELL) can have its centre under the card, and a click there would
+-- toggle the card instead.  Returns cursor px.
+local GRID = {0.5, 0.3, 0.7, 0.15, 0.85, 0.05, 0.95}
+local function hits(n, x, y)
+  local C = G.CONTROLLER
+  C:get_cursor_collision({x = x, y = y})
+  for _, v in ipairs(C.collision_list) do
+    if v.states.hover.can and not v.states.drag.is then
+      while v do
+        if v == n then return true end
+        v = v.parent
+      end
+      return false
+    end
+  end
+  return false
+end
+local function aim_point(n)
+  local s = G.TILESCALE * G.TILESIZE
+  local cx, cy = n:put_focused_cursor()
+  if not (n.T and n.container) or hits(n, cx / s, cy / s) then return cx, cy end
+  local x0, y0, best, bx, by = n.T.x + n.container.T.x, n.T.y + n.container.T.y, math.huge, cx, cy
+  for _, fy in ipairs(GRID) do
+    for _, fx in ipairs(GRID) do
+      local x, y = x0 + fx * n.T.w, y0 + fy * n.T.h
+      local d = (fx - 0.5) ^ 2 + (fy - 0.5) ^ 2
+      if d < best and hits(n, x, y) then best, bx, by = d, x * s, y * s end
+    end
+  end
+  return bx, by
+end
+
+-- point the (virtual) mouse at a node; returns false when the node is gone
 function IN.aim(kind, id)
   local n = IN.find(kind, id)
   if not n then return false end
-  IN.mx, IN.my = n:put_focused_cursor()
+  IN.mx, IN.my = aim_point(n)
   love.mousemoved(IN.mx, IN.my, 0, 0, false)
   return true
 end

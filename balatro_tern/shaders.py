@@ -602,6 +602,10 @@ def bg_tiles(name, boss, size, fps=15):
     """background.fs at its own grid (size = cells, one px each), cut into a cols x rows mosaic of looping WebPs so
     every tile stays under Tern's per-image ceiling (1024 frames / 64 MiB decoded) at `fps`.  Tern starts an
     animation when the image first draws, on the window's clock: tiles mounted in one render stay in step.
+    Lossless: the swirl is a few hundred mixes of three colours, and a lossy encoder (q82 was ~2 KiB a frame) smears
+    its one-cell detail into blocky blur once Tern scales the cells up.  The frames share one palette of <= 256 of
+    their own colours (median cut of a sample; at most a few levels off where a state has more), so WebP's lossless
+    palette mode keeps them at ~20-45 KiB a frame.
     -> [(key, bytes, mime, x0, y0, x1, y1)] with the tile's cell rect.  Cached on disk like bake()."""
     w, h = size
     p = bg_set(name, boss)
@@ -616,7 +620,7 @@ def bg_tiles(name, boss, size, fps=15):
     xs = [w * i // cols for i in range(cols + 1)]
     ys = [h * j // rows for j in range(rows + 1)]
     rects = [(xs[i], ys[j], xs[i + 1], ys[j + 1]) for j in range(rows) for i in range(cols)]
-    key = hashlib.sha1(json.dumps([VERSION, "bgtiles", _norm(p), size, N], sort_keys=True, default=str).encode()).hexdigest()[:24]
+    key = hashlib.sha1(json.dumps([VERSION, "bgtiles-pal", _norm(p), size, N], sort_keys=True, default=str).encode()).hexdigest()[:24]
     files = [CACHE / f"bgt-{key}-{n}.webp" for n in range(len(rects))]
     if not all(f.exists() for f in files):
         c1, c2, c3 = (_col(p[k]) for k in ("colour_1", "colour_2", "colour_3"))
@@ -624,9 +628,12 @@ def bg_tiles(name, boss, size, fps=15):
         for i in range(N):
             r, g, b, _ = _bg_frame(w, h, i * BG_PERIOD / N, c1, c2, c3, float(p.get("contrast", 1.)), float(p.get("spin_amount", 0.)), 0.)
             frames.append((np.stack([r, g, b], -1) * 255 + .5).astype(np.uint8))
+        pal = Image.fromarray(np.concatenate(frames[::max(1, N // 32)], 0), "RGB").quantize(256, method=Image.Quantize.MEDIANCUT,
+                                                                                              dither=Image.Dither.NONE)
+        frames = [np.asarray(Image.fromarray(fr, "RGB").quantize(palette=pal, dither=Image.Dither.NONE).convert("RGB")) for fr in frames]
         CACHE.mkdir(parents=True, exist_ok=True)
         for f, (x0, y0, x1, y1) in zip(files, rects):
-            data, _ = _encode([Image.fromarray(fr[y0:y1, x0:x1], "RGB") for fr in frames], round(BG_PERIOD / N * 1000), 0, False, quality=82)
+            data, _ = _encode([Image.fromarray(fr[y0:y1, x0:x1], "RGB") for fr in frames], round(BG_PERIOD / N * 1000), 0, True, quality=50)
             tmp = f.with_name(f".{os.getpid()}-{f.name}")
             tmp.write_bytes(data)
             tmp.replace(f)

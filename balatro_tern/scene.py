@@ -2,13 +2,16 @@
 
 scene.lua walks the game's own UIElements (VT in game units, resolved colours, emboss/shadow/outline, text, DynaText,
 sprites) and returns two parallel strings.  Structure (S) changes rarely -> the node tree is rebuilt; the per-frame
-geometry/colours (F) become one stylesheet per UIBox (`sc<boxid>`), re-sent only when its rules changed.
+geometry/colours (F) become stylesheets per UIBox (`sc<boxid>`, `sc<boxid>_<k>`: CHUNK elements each), re-sent only
+when their rules changed.
 
 Loop contract (the integration owner calls these):
     scene = Scene(game, session, click=lambda uie_id: handler)       # once
     scene.read()                      # every loop, before building the sheets
     scene.key                         # changes iff nodes must be rebuilt
-    scene.under(), scene.over()       # nodes: below the cards (u + a layers) / above them (c, o, p layers)
+    scene.under(), scene.over()       # nodes: below the cards (m, u, a layers) / above them (c, t, o, p layers)
+    scene.card_boxes(card_id)         # node of a card's own boxes (price, buy / use / sell, layer f), or None:
+                                      # placed right before that card, as Card:draw draws them
     scene.update(sf, units)           # every loop: diffed per-box stylesheets
     scene.tip_node(card_id, sig, units)  # hidden popup subtree of a card (shown by CSS `:hover`), or None
 """
@@ -25,7 +28,9 @@ from .motion import Units
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent / "extracted"
-UNDER, OVER = ("m", "u", "a", "f"), ("c", "t", "o", "p")  # scene.lua layer_of (Game:draw order); the cards sit between
+UNDER, OVER = ("m", "u", "a"), ("c", "t", "o", "p")  # scene.lua layer_of (Game:draw order); the cards (each with its 'f' boxes) sit between
+SHADOW = "0000004d"  # ui.lua draw_self: a text's drop shadow, black at 0.3
+CHUNK = 8  # elements per stylesheet: one animated element re-sends its chunk, not its whole box (the HUD is ~13 KB)
 # TEXT_OFFSET of the game's English font (G.FONTS[1]) in text-scale fractions: x = 10, y = -20 love-px * FONTSCALE / TILESIZE
 TX, TY = 10 * 0.1 / 20, -20 * 0.1 / 20
 DEG = 57.29578
@@ -64,20 +69,22 @@ def sprite_blob(path, cw, ch, x, y, frames):
 
 
 class El:
-    __slots__ = ("id", "kind", "bid", "text", "shadow", "vert", "obj", "f", "tip")
+    __slots__ = ("id", "kind", "bid", "text", "shadow", "vert", "obj", "f", "tip", "raw", "css", "ck", "col")
 
     def __init__(self, f):
         self.id, self.kind, self.bid, self.text, self.shadow, self.vert = int(f[1]), f[2], int(f[3]), f[4], f[5] == "1", f[6] == "1"
         self.obj = f[7].split("\x03") if len(f) > 7 and f[7] else None
         self.tip = len(f) > 8 and f[8] == "u"
-        self.f = None
+        self.f = self.raw = None  # this frame's F row (split / as sent)
+        self.css = self.ck = None  # el_css cache and what it was computed from
+        self.col = None  # colour baked into a static text's node (T)
 
 
 class Box:
-    __slots__ = ("id", "layer", "els", "node", "css")
+    __slots__ = ("id", "layer", "card", "els", "node", "css")
 
-    def __init__(self, bid, layer):
-        self.id, self.layer, self.els, self.node, self.css = bid, layer, [], None, None
+    def __init__(self, bid, layer, card=None):
+        self.id, self.layer, self.card, self.els, self.node, self.css = bid, layer, card, [], None, None
 
 
 # ---------------------------------------------------------------- hover tips as one image
@@ -286,6 +293,12 @@ class Scene:
         self._uitips = {}  # uie id -> (node, css)
         self._tipimg = {}  # tip content -> (blob, class, css): see _tip_from
         self.flame_content = {}  # "c" | "m" -> callable() -> node: the flame image (Shaders)
+        # static texts bake their colour into the image (glyphs.py); one whose colour keeps changing is rebuilt the first
+        # few times, then drawn white + tint filter for good (its id joins _tint) so it never rebuilds the tree each frame
+        self._flips = {}  # T element id -> colour changes seen
+        self._tint = set()
+        self._texts = []  # (box, El) of every T element, per structure
+        self._by_card = {}  # card sort_id -> its 'f' boxes, per structure
 
     def set_mute(self, music_muted, sfx_muted):
         """Labels of the Options menu's two sidecar toggles."""
@@ -304,8 +317,22 @@ class Scene:
             self._S = S
             self.key += 1
             self.boxes = self._parse_structure(S)
+            self._texts = [(b, e) for b in self.boxes for e in b.els if e.kind == "T"]
+            self._by_card = {}
+            for b in self.boxes:
+                if b.layer == "f" and b.card is not None:
+                    self._by_card.setdefault(b.card, []).append(b)
+            live = {e.id for _, e in self._texts}
+            self._flips = {k: v for k, v in self._flips.items() if k in live}
         self._F = F
         self._apply_frame(self.boxes, F)
+        for b, e in self._texts:
+            if e.col is not None and e.f[8] != e.col and e.id not in self._tint:  # its node shows another colour: rebuild
+                n = self._flips[e.id] = self._flips.get(e.id, 0) + 1
+                if n >= 3:
+                    self._tint.add(e.id)
+                e.col, b.node = None, None
+                self.key += 1
 
     @staticmethod
     def _parse_structure(S):
@@ -315,7 +342,7 @@ class Scene:
                 continue
             f = line.split("\t")
             if f[0] == "B":
-                cur = Box(int(f[1]), f[2])
+                cur = Box(int(f[1]), f[2], int(f[3]) if len(f) > 3 and f[3] else None)
                 boxes.append(cur)
             else:
                 cur.els.append(El(f))
@@ -323,12 +350,13 @@ class Scene:
 
     @staticmethod
     def _apply_frame(boxes, F):
-        lines = [l for l in F.split("\n") if l]
-        it = iter(lines)
+        it = iter(F.split("\n"))
         for b in boxes:
             next(it)  # box header row
             for e in b.els:
-                e.f = next(it).split("\t")
+                line = next(it)
+                if line != e.raw:  # most rows are the same as last frame: keep their split (and el_css cache)
+                    e.raw, e.f = line, line.split("\t")
 
     # ------------------------------------------------------------------ nodes
     def _blob(self, name, x, y, frames):
@@ -349,9 +377,9 @@ class Scene:
         if not sh:
             return [n]
         if e.kind == "T":
-            txt = ui.html.div(self.gl.text_node(e.text), class_=f"sce s{e.id}s scx scf", key=f"u{e.id}s")
+            txt = ui.html.div(self.gl.text_node(e.text, SHADOW), class_=f"sce s{e.id}s scx scf", key=f"u{e.id}s")
         else:
-            txt = ui.html.div(*self._dyna_glyphs(e.obj[1]), class_=f"sce s{e.id}s scx", key=f"u{e.id}s")
+            txt = ui.html.div(*self._dyna_glyphs(e.obj[1], shadow=e.obj[3]), class_=f"sce s{e.id}s scx", key=f"u{e.id}s")
         return [txt, n]
 
     def _el_node1(self, e, tip=False):
@@ -371,9 +399,11 @@ class Scene:
         if e.kind == "P":  # particle emitter: a pool of squares placed per frame
             return ui.html.div(*[ui.html.div(class_=f"pt q{i}", key=f"q{i}") for i in range(int(o[1]))], class_=f"sce s{e.id}", key=key)
         if e.kind == "T":
-            return ui.html.div(self.gl.text_node(e.text), class_=" ".join(cls + ["scx", "scf"]), key=key, **kw)
+            e.col = e.f[8]
+            col = "" if e.id in self._tint else e.col  # white + tint filter (_text_css) once its colour proved unsteady
+            return ui.html.div(self.gl.text_node(e.text, col), class_=" ".join(cls + ["scx", "scf"]), key=key, **kw)
         if o and o[0] == "D":
-            return ui.html.div(*self._dyna_glyphs(o[1]), class_=" ".join(cls + ["scx"]), key=key, **kw)
+            return ui.html.div(*self._dyna_glyphs(o[1], o[2]), class_=" ".join(cls + ["scx"]), key=key, **kw)
         if o and o[0] == "S":
             name, x, y, frames = o[1], int(float(o[2])), int(float(o[3])), int(float(o[4]))
             if name not in self.atlas:
@@ -385,9 +415,15 @@ class Scene:
             return ui.html.div(mk() if mk else None, class_=" ".join(cls + ["scfl", f"scfl-{o[1]}"]), key=key)
         return ui.html.div(*extra, class_=" ".join(cls), key=key, **kw)
 
-    def _dyna_glyphs(self, texts):
-        """One group per string of the DynaText (x05-separated): cycling is `.g<j>` display, the node tree stays."""
-        return [ui.html.div(*self.gl.nodes(t), class_=f"dg g{j}", key=f"g{j}") for j, t in enumerate(texts.split("\5"))]
+    def _dyna_glyphs(self, texts, colss="", shadow=None):
+        """One group per string of the DynaText (x05-separated): cycling is `.g<j>` display, the node tree stays.  Letters
+        carry their colours (colss: per string, comma-separated per letter, cycled), or all the `shadow` colour."""
+        cl = colss.split("\5")
+        out = []
+        for j, t in enumerate(texts.split("\5")):
+            cols = (shadow,) if shadow is not None else (cl[j].split(",") if j < len(cl) else ("",))
+            out.append(ui.html.div(*self.gl.nodes(t, cols), class_=f"dg g{j}", key=f"g{j}"))
+        return out
 
     def _box_node(self, b, tip=False):
         kids = [n for e in b.els for n in self._el_node(e, tip)]
@@ -408,21 +444,43 @@ class Scene:
     def over(self):
         return self._layer(OVER, "scover")
 
+    def card_boxes(self, card_id):
+        """A card's price tag / buy / use / sell buttons / focus frame (layer 'f') as one node, or None.  Card:draw draws
+        them right before the card's face, so they peek out from behind it yet cover the cards drawn earlier: the
+        caller puts this node just before the card's own."""
+        bs = self._by_card.get(card_id)
+        if not bs:
+            return None
+        for b in bs:
+            if b.node is None:
+                b.node = self._box_node(b)
+        return ui.html.div(*[b.node for b in bs], class_="scroot scfb", key=f"f{card_id}")
+
     # ------------------------------------------------------------------ css
     def update(self, sf, u):
-        """Per-box stylesheets for the current frame (only boxes whose rules changed are re-sent).  Boxes are laid out
-        at ROOM_ORIG; the game's screen shake (ROOM offset) is one transform on the layer roots, so a shaking table
-        does not re-send every box."""
+        """Per-box stylesheets for the current frame, CHUNK elements per sheet (only sheets whose rules changed are
+        re-sent).  Boxes are laid out at ROOM_ORIG; the game's screen shake (ROOM offset) is one transform on the layer
+        roots, so a shaking table does not re-send every box."""
         shake = f".scroot{{transform:translate({(u.rx - u.ox) * u.U:.4f}em,{(u.ry - u.oy) * u.U:.4f}em)}}"
         if self._sent.get("scshake") != shake:
             self._sent["scshake"] = shake
             sf.stylesheet("scshake", shake)
         u = Units(u.U, u.ox, u.oy)
-        live = {"scshake", "sckf"}
-        css_of = {f"sc{b.id}": self.box_css(b, u) for b in self.boxes}  # first: it fills _kf
-        live.update(css_of)
+        sheets = {}
+        for b in self.boxes:  # first: el_css fills _kf
+            css = [self._el_css(e, u) for e in b.els]
+            n = max(1, -(-len(css) // CHUNK))
+            for k in range(n):
+                part = "".join(css[k * CHUNK:(k + 1) * CHUNK])
+                if k == n - 1:
+                    # the box is hidden until its last sheet is applied (sheets apply in order, so all its rules are in by
+                    # then) and again once it is removed: a node that reaches Tern before / after its rules would sit
+                    # unstyled at the stage's top-left in the inherited font size
+                    part += f".sb{b.id}{{visibility:visible}}"
+                sheets[f"sc{b.id}_{k}" if k else f"sc{b.id}"] = part
+        live = {"scshake", "sckf"} | sheets.keys()
         # keyframes go out before the boxes that use them
-        for name, css in [("sckf", "".join(self._kf.values()))] + list(css_of.items()):
+        for name, css in [("sckf", "".join(self._kf.values()))] + list(sheets.items()):
             if self._sent.get(name) != css:
                 self._sent[name] = css
                 sf.stylesheet(name, css)
@@ -430,10 +488,12 @@ class Scene:
             del self._sent[name]
             sf.stylesheet(name, None)
 
-    def box_css(self, b, u):
-        # hidden until this box's sheet is applied (and again once it is removed): a node that reaches Tern before / after its rules
-        # would sit unstyled at the stage's top-left in the inherited font size
-        return f".sb{b.id}{{visibility:visible}}" + "".join(self.el_css(e, u) for e in b.els)
+    def _el_css(self, e, u):
+        """el_css, recomputed only when the element's F row (or the units, or its tint mode) changed."""
+        ck = (e.raw, u.U, u.ox, u.oy, e.id in self._tint)
+        if e.ck != ck:
+            e.ck, e.css = ck, self.el_css(e, u)
+        return e.css
 
     def el_css(self, e, u):
         f, U = e.f, u.U
@@ -445,7 +505,8 @@ class Scene:
         if e.kind == "P":
             return self._particles_css(e, u)
         if e.kind == "T":
-            return self._text_css(e, u, x, y, w, h, vs, vr, f[8], 0.0, 0.0, _f(f[16]), _f(f[11]), _f(f[12]), "0000004d" if e.shadow else "", e.text)
+            tint = f[8] if e.id in self._tint else ""  # else the colour is in the image
+            return self._text_css(e, u, x, y, w, h, vs, vr, tint, 0.0, 0.0, _f(f[16]), _f(f[11]), _f(f[12]), e.shadow, e.text)
         if o and o[0] == "D":
             return self._dyna_css(e, u, o)
         if o and o[0] == "S":
@@ -504,9 +565,10 @@ class Scene:
             css += f".s{e.id}.scb:hover{{{';'.join(hv)}}}"
         return css
 
-    def _text_css(self, e, u, x, y, w, h, vs, vr, colour, ox, oy, scale, shx, shy, shcol, text):
+    def _text_css(self, e, u, x, y, w, h, vs, vr, tint, ox, oy, scale, shx, shy, shadow, text):
         """Glyph images (glyphs.py) laid out like LOVE's Text.  The element's font-size is the text scale (in room em),
-        so its own lengths are written in its own em: room lengths divided by the size."""
+        so its own lengths are written in its own em: room lengths divided by the size.  The colours are in the images
+        (main text, SHADOW copy); `tint` is a colour only for a text drawn white (Scene._tint)."""
         U = u.U
         fs = scale * vs * U
         offx, offy = TX * scale + ox, TY * scale + oy
@@ -531,12 +593,12 @@ class Scene:
                 d.append(f"filter:{glyphs.tint(col)}")
             return f"{sel}{{{';'.join(d)}}}"
 
-        css = rule(sel, x + offx, y + offy, fs, colour)
-        if shcol:
+        css = rule(sel, x + offx, y + offy, fs, tint)
+        if shadow:
             # the game draws the text again in black at 0.97 scale about the element's centre, shifted by shadow_parrallax
             k = 0.97
             sx, sy = x + offx + (1 - k) * w / 2 + shx, y + offy + (1 - k) * h / 2 + shy
-            css += rule(sel + "s", sx, sy, fs * k, shcol)
+            css += rule(sel + "s", sx, sy, fs * k, "")
         return css
 
     def _dyna_css(self, e, u, o):
@@ -548,9 +610,9 @@ class Scene:
         x, y, w, h, vs, vr = _f(ex[0]), _f(ex[1]), _f(ex[2]), _f(ex[3]), _f(ex[4]) or 1.0, _f(ex[5])
         ox, oy = _f(ex[6]), _f(ex[7])
         per = [tuple(map(float, p.split(","))) for p in ex[8].split(";")] if ex[8] else []
-        texts, cols_all, shcol, sc = o[1].split("\5"), o[2].split("\5"), o[3], _f(o[4])
+        texts, shcol, sc = o[1].split("\5"), o[3], _f(o[4])
         j = int(_f(ex[17]))  # the focused string (cycling DynaText): its group shows, the others stay hidden
-        text, cols = texts[j], cols_all[j].split(",")
+        text = texts[j]  # its letters' colours are in their images (_dyna_glyphs)
         U, N, TH = u.U, glyphs.N, 0.83  # TH: TEXT_HEIGHT_SCALE of G.FONTS[1] (game.lua:969)
         bob = self._bob(ex[13], _f(ex[14]), _f(ex[15])) if ex[13] else None
         wob = self._wob(_f(ex[16])) if ex[16] else None
@@ -563,9 +625,6 @@ class Scene:
                 d.append(f"transform-origin:{(w / 2 - ox - dx) * U * k:.4f}em {(h / 2 - oy - dy) * U * k:.4f}em")
                 d.append(f"transform:rotate({vr * DEG:.2f}deg) scale({vs:.3f})")
             out = [f"{sel}{{{';'.join(d)}}}{sel} .dg{{display:none}}{sel} .g{j}{{display:block}}"]
-            single = shadow or len(cols) == 1
-            if single and (shcol if shadow else cols[0]):
-                out.append(f"{sel} .g{j} .gl{{filter:{glyphs.tint(shcol if shadow else cols[0])}}}")
             cum = 0.0
             for k, ch in enumerate(text[:len(per)]):
                 wem, oxe, oye, r, s, p = per[k]
@@ -577,8 +636,6 @@ class Scene:
                     if r or s != 1 or wob:
                         ld.append(f"transform-origin:{glyphs.PAD / N + 0.5 * wem:.4f}em {0.5 * TH:.4f}em")
                         ld.append(f"transform:rotate({r * DEG:.2f}deg) scale({max(s, 0.001):.3f})")
-                    if not single and cols[k % len(cols)]:
-                        ld.append(f"filter:{glyphs.tint(cols[k % len(cols)])}")
                     anims = [a for a in (None if shadow else bob, wob) if a]
                     if anims:  # text.lua phases: rate*REAL + 200*i (bob), 2*REAL + i (wobble), i 1-based
                         ld.append("animation:" + ",".join(f"{a[0]} {a[1]:.4f}s linear infinite" for a in anims))

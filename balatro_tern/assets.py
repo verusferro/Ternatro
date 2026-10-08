@@ -65,7 +65,7 @@ def card_png(card: dict) -> tuple[str, bytes]:
     """(cache key, PNG) for a snapshot card; back if facing == 'back'."""
     xy = lambda p: (p["x"], p["y"]) if p else None
     back = card.get("facing") == "back"
-    if back:  # contract has no deck field: honour card["back_pos"] if the app adds one, else Red deck
+    if back:  # the card's deck (snapshot back_pos), else Red deck
         pos = xy(card.get("back_pos")) or BACK_POS["b_red"]
         atlas, key, soul, fa, fp, seal = "centers", "back", None, None, None, None
     else:

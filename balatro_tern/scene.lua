@@ -1,7 +1,8 @@
 -- scene.lua: walks every live UIBox (HUD, blind select, shop, cash out, overlays, tooltips ...) and packs what the
 -- game's own UI engine drew into two parallel strings; scene.py turns them into TSP nodes + a per-box stylesheet.
 --   SC.frame() -> S, F      S = structure (changes => rebuild nodes), F = per-frame geometry/colours, line i of F is line i of S
---   S lines:  B \t boxid \t layer                        a UIBox (layer u|a|c|o|p, bottom -> top draw order)
+--   S lines:  B \t boxid \t layer \t card                a UIBox (layer m|u|a|f|c|t|o|p, bottom -> top draw order;
+--                                                       card = the sort_id of the card an 'f' box belongs to)
 --             e \t id \t kind \t bid \t text \t shadow \t vert \t obj      one drawn UIElement (kind R C B T O)
 --   F lines:  B \t boxid                                  (same row as its S line)
 --             id \t vis \t x \t y \t w \t h \t scale \t r \t fill \t emb \t embcol \t shx \t shy \t shcol \t outw \t outcol \t radius \t extra
@@ -71,14 +72,19 @@ local function object_info(e, obj)
     local letters, per = st.letters, {}
     -- float / bump (text.lua update_text) are pure functions of G.TIMERS.REAL with phase 200*i per letter: send their
     -- rate and amplitude once and let Tern run them (scene.py keyframes) instead of a new offset every frame.
-    -- Only while nothing else (quiver, pulse, a letter's scale) feeds the offset.
+    -- Only while nothing else (a quivering text, a running pulse) feeds the offset, scale or tilt.  The game stops a
+    -- quiver with set_quiver(0) and leaves the table set, and text.lua never clears config.pulse once it has run (a
+    -- pulse shows as scaled letters): the flags alone would stream the HUD's floating chips / mult digits every
+    -- frame for the rest of the run.
+    local scaled = false
+    for _, l in ipairs(letters) do if math.abs((l.scale or 1) - 1) > 1e-3 then scaled = true; break end end
+    local quiver = obj.config.quiver and (obj.config.quiver.amount or 0) ~= 0
     local mode, rate, amp, wob = '', 0, 0, ''
-    if not G.SETTINGS.reduced_motion and not obj.config.quiver and not obj.config.pulse then
+    if not G.SETTINGS.reduced_motion and not quiver and not scaled then
       if obj.config.bump then
         mode, rate, amp = 'b', obj.bump_rate, obj.bump_amount * math.sqrt(sc) * 7
       elseif obj.config.float then
         mode, rate, amp = 'f', 2.666, math.sqrt(sc) * k * 2000
-        for _, l in ipairs(letters) do if math.abs((l.scale or 1) - 1) > 1e-3 then mode = '' end end
       end
       -- rotate: letter.r = static tilt + 0.02*sin(2*REAL + i), the sine likewise left to Tern
       if obj.config.rotate then wob = obj.config.rotate == 2 and '-1' or '1' end
@@ -170,6 +176,8 @@ local function emit(e, S, Fo, vis_parent, ctrl)
       if c.object.is and c.object:is(UIBox) and c.object.states.visible and vis then ctrl.nested[#ctrl.nested + 1] = c.object end
       return vis
     end
+    -- Sprite:draw skips a hidden sprite: create_toggle keeps its check mark in the tree, hidden while the toggle is off
+    if c.object.is and c.object:is(Sprite) and not c.object.states.visible then vis = false end
   end
   local fill, hover, emb, embcol, shx, shy, shcol, outw, outcol, rad = '', 0, 0, '', 0, 0, '', 0, '', 0
   if kind ~= UIT_O then
@@ -223,6 +231,7 @@ end
 
 -- ===== particles (engine/particles.lua): rotated squares at offset, `scale` wide, colour * (1 - fade_alpha) =====
 -- One element per emitter with a pool of `n` slots (high-water mark, so births/deaths don't rebuild nodes).
+-- (Placed per frame: as Tern CSS animations each particle would cost Tern a compositing pass every frame.)
 local function is_particles(v) return getmetatable(v) == Particles end
 local function emit_particles(p, S, Fo, vis)
   local live = 0
@@ -254,16 +263,17 @@ local function walk(e, S, Fo, vis_parent, ctrl)
 end
 
 -- Game:draw order: parentless Moveables (pack sparkles) < UIBoxes < card areas/cards (+ their boxes and particles)
--- < attention_text boxes < overlay menu < popups
+-- < attention_text boxes < overlay menu < popups.  A card's own boxes ('f') also return the card: they are drawn
+-- with it (Card:draw), right under its face, so Python places them in the DOM just before that card.
 local function layer_of(b)
   if b == G.OVERLAY_MENU then return 'o' end
   if b.attention_text then return 't' end
   local p = b.config and b.config.parent
   -- Card:draw draws its focus frame (card_focus_ui) before the card, except in the hand, and its price tag and
   -- buy / use buttons before its sprite too (they peek out from behind the card)
-  if p and p.children and p.children.focused_ui == b and p.area ~= G.hand then return 'f' end
+  if p and p.children and p.children.focused_ui == b and p.area ~= G.hand then return 'f', p.sort_id end
   local ch = p and p.children
-  if ch and (ch.price == b or ch.buy_button == b or ch.buy_and_use_button == b or ch.use_button == b) then return 'f' end
+  if ch and (ch.price == b or ch.buy_button == b or ch.buy_and_use_button == b or ch.use_button == b) then return 'f', p.sort_id end
   if p then
     if p.is and p:is(CardArea) then return 'a' end
     return 'c'
@@ -293,8 +303,8 @@ end
 
 local ORDER = {m = 0, u = 1, a = 2, f = 3, c = 4, t = 5, o = 6, p = 7}
 
-local function dump_box(b, layer, S, Fo)
-  S[#S + 1] = table.concat({'B', b.ID, layer}, '\t')
+local function dump_box(b, layer, S, Fo, card)
+  S[#S + 1] = table.concat({'B', b.ID, layer, card or ''}, '\t')
   Fo[#Fo + 1] = 'B\t' .. b.ID
   local ctrl = {nested = {}}
   -- UIBox:draw draws its children (attached particles) before its own UI
@@ -318,7 +328,9 @@ function SC.frame()
   local function add(b, layer)
     if seen[b] or skipped(b) or not b.states.visible then return end
     seen[b] = true
-    list[#list + 1] = {b, layer or layer_of(b)}
+    local card
+    if not layer then layer, card = layer_of(b) end
+    list[#list + 1] = {b, layer, nil, nil, card}
   end
   for _, b in ipairs(G.I.UIBOX) do
     -- a UIBox that is a UIT.O's object is drawn by its container (dump_box's `nested`), on its layer and above it
@@ -346,8 +358,8 @@ function SC.frame()
     if list[i][3] == 'P' then
       dump_emitter(b, layer, S, Fo)
     else
-      local nested = dump_box(b, layer, S, Fo)
-      for _, nb in ipairs(nested) do if not seen[nb] then seen[nb] = true; list[#list + 1] = {nb, layer, nil, #list + 1} end end
+      local nested = dump_box(b, layer, S, Fo, list[i][5])
+      for _, nb in ipairs(nested) do if not seen[nb] then seen[nb] = true; list[#list + 1] = {nb, layer, nil, #list + 1, list[i][5]} end end
     end
     i = i + 1
   end
@@ -522,4 +534,26 @@ function create_UIBox_options()
     mute_button('music', 'scene_toggle_music'),
     mute_button('sfx', 'scene_toggle_sfx'),
   }})
+end
+
+-- ===== Game over / You win: no Main Menu (no menu stage here: it left an empty table with no way to a new run) =====
+-- New Run stays: the game's own New Run screen (deck, stake, challenges).
+local function buttons_in(n, out)
+  if n.config and n.config.button then out[n.config.button] = true end
+  for _, c in pairs(n.nodes or {}) do buttons_in(c, out) end
+  return out
+end
+local function drop_main_menu(n)
+  for k, c in pairs(n.nodes or {}) do  -- pairs: these node lists have holes (`cond and node or nil`)
+    local b = buttons_in(c, {})
+    if b.go_to_menu then
+      b.go_to_menu = nil
+      if next(b) == nil then n.nodes[k] = nil else drop_main_menu(c) end
+    end
+  end
+  return n
+end
+for _, name in ipairs{'create_UIBox_game_over', 'create_UIBox_win'} do
+  local orig = _G[name]
+  _G[name] = function(...) return drop_main_menu(orig(...)) end
 end

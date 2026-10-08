@@ -7,14 +7,20 @@
 .ci { transition: transform 160ms spring(240ms, .4); cursor: pointer; }
 .ci:hover { transform: scale(1.06) rotate(-1.5deg); }
 .ci .sf-image { image-rendering: pixelated; object-fit: fill; }
-/* tooltips: shown by real mouse hover (CSS :hover on the card box) */
-.mc:hover { z-index: 20; }
-.room.ovl .mc:hover { z-index: 1; }  /* an open overlay menu stays on top (Game:draw) */
-.room.ovl .mc.ovc:hover { z-index: 13; }  /* ...but a card inside the overlay (deck view) stays above its panel */
+/* a card is an image node, and Tern gives a drawn image a zoom-in cursor (its click would open the image viewer;
+   ours runs the card's own click): keep the card's hand pointer */
+.room .sf-zoom, .room .sf-zoom .sf-img-frame { cursor: inherit; }
+/* tooltips: `.mt` (same per-frame rule as its card) shown by real mouse hover on the card just before it */
+.mt { z-index: 40; pointer-events: none; }
+.room.ovl .mt { z-index: 1; }  /* an open overlay menu stays on top (Game:draw) */
+.room.ovl .mt.ovc { z-index: 13; }  /* ...but a card inside the overlay (deck view) shows its popup above its panel */
 .flimg { image-rendering: pixelated; }
 .scfl .sf-image { width: 100%; height: 100%; }
-/* z order: table cards < Scene's card-attached boxes / overlay menus < cards that live inside an overlay < hovered card */
+/* z order: Scene's boxes under the cards < table cards, each right after its own price / buy / use / sell boxes
+   (.scfb), in the game's draw order (DOM order at equal z) < Scene's card-attached boxes / overlay menus < cards that
+   live inside an overlay < card popups */
 .scl-c, .scl-t, .scl-o, .scl-p { z-index: 10; }
 .mc.ovc { z-index: 12; }
 .scunder { z-index: 0; }
+.scfb { z-index: 1; }
 .scover { z-index: 10; }

@@ -1,6 +1,6 @@
 /* Scene (owner: Scene): static rules; per-UIBox geometry/colours come from the `sc<boxid>` sheets (scene.py). */
 .scroot, .scbox { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
-.scbox { visibility: hidden; }  /* shown by the box's own sheet (`.sb<id>`, scene.py box_css) */
+.scbox { visibility: hidden; }  /* shown by the box's own (last) sheet (`.sb<id>`, scene.py update) */
 .sce { position: absolute; margin: 0; padding: 0; box-sizing: border-box; pointer-events: none; }
 /* text = images of the game's font (glyphs.py): 1em = the text's line.  Static text (.scf) is one image per string;
    DynaText letters are placed per letter (.l<k> rules) */
@@ -18,7 +18,7 @@
   pointer-events: none; background: none; border: 0; border-radius: 0; box-shadow: none; outline: 0; padding: 0; margin: 0; }  /* no image frame */
 /* card popups for real mouse hover (Tern never reports hover to the game); keyboard focus gets the game's own live popup */
 .sctip { position: absolute; left: 0; top: 0; width: 0; height: 0; display: none; z-index: 40; pointer-events: none; }
-.mc:hover > .sctip { display: block; }
+.mc:hover + .mt > .sctip { display: block; }
 .scht { pointer-events: auto; }
 .scht:hover > .sctip { display: block; }
 /* one group per string of a DynaText (scene.py _dyna_glyphs): only the focused string's group shows (.g<j>) */

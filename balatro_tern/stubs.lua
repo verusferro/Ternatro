@@ -1,5 +1,5 @@
 -- love.* stubs + Balatro bridge (module `BT`). Loaded by game.py after it sets the Lua globals
--- ROOT (game dir, trailing /), DATA (save dir, trailing /), PYLS(path), PYSTAT(path), PYMKDIR(path).
+-- ROOT (game dir, trailing /), DATA (save dir, trailing /), PYLS(path), PYSTAT(path), PYMKDIR(path), PYRANDOM() ([0, 1)).
 package.path = ROOT..'?.lua;'..package.path
 local stub
 stub = setmetatable({}, {__index=function() return stub end, __call=function() return stub end})
@@ -168,6 +168,19 @@ function BT.busy()
   return (G.CONTROLLER.locked and true) or (G.screenwipe and true) or ((G.GAME.STOP_USE or 0) > 0) or qlen_blocking() or false
 end
 
+-- generate_starting_seed() draws its entropy from the cursor (Controller:set_cursor_hover: G.CURSOR.T and
+-- G.TIMERS.TOTAL). Here the cursor never moves and the clock advances in fixed 1/60 s ticks, so every launch rolled
+-- the same seed: shift the cursor's time by a random amount for the roll.
+local o_starting_seed = generate_starting_seed
+function generate_starting_seed()
+  local h = G.CONTROLLER.cursor_hover
+  local t = h.time
+  h.time = t + PYRANDOM() * 1e6
+  local seed = o_starting_seed()
+  h.time = t
+  return seed
+end
+
 -- ===== new / continue =====
 function BT.new_run(seed, deck, stake)
   G.E_MANAGER:clear_queue()
@@ -221,6 +234,7 @@ end
 
 local function card_t(c)
   local ctr = c.config.center
+  local back = G.GAME[c.back or 'selected_back']  -- a Back: the run's deck, or the deck the New Run screen shows
   local st = {}
   if c.ability.eternal then st[#st+1] = 'eternal' end
   if c.ability.perishable then st[#st+1] = 'perishable' end
@@ -238,6 +252,7 @@ local function card_t(c)
     highlighted=c.highlighted and true or false, debuff=c.debuff and true or false, facing=c.facing or 'front',
     cost=c.cost or 0, sell=c.sell_cost or 0, name=card_name(c),
     atlas=ctr.atlas or ((ctr.set == 'Joker' or ctr.consumeable or ctr.set == 'Voucher') and ctr.set) or 'centers', pos=xy(ctr.pos), soul_pos=xy(ctr.soul_pos), front_atlas=fa, front_pos=fp,
+    back_pos=xy(back and back.pos),
   }
 end
 function BT.card_json(c) return json(card_t(c)) end  -- scene.lua: cards drawn inside tips
@@ -288,7 +303,8 @@ local PACKS = {'TAROT_PACK', 'PLANET_PACK', 'SPECTRAL_PACK', 'STANDARD_PACK', 'B
 local function in_pack() return in_state(unpack(PACKS)) end
 
 function BT.snapshot()
-  if not G.GAME or G.STAGE ~= G.STAGES.RUN then
+  -- no areas: no run, or the tick between Game:delete_run and Game:start_run (G.FUNCS.start_run queues them as two events)
+  if not G.GAME or G.STAGE ~= G.STAGES.RUN or not G.hand then
     return json{state='MENU', won=false, seed=NULL, busy=false, overlay=false, hud=NULL, areas=obj{}, blind_choices={}, shop=NULL, can={play=false, discard=false}}
   end
   local g, cr = G.GAME, G.GAME.current_round
