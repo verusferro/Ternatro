@@ -535,3 +535,25 @@ function create_UIBox_options()
     mute_button('sfx', 'scene_toggle_sfx'),
   }})
 end
+
+-- ===== Game over / You win: no Main Menu (no menu stage here: it left an empty table with no way to a new run) =====
+-- New Run stays: the game's own New Run screen (deck, stake, challenges).
+local function buttons_in(n, out)
+  if n.config and n.config.button then out[n.config.button] = true end
+  for _, c in pairs(n.nodes or {}) do buttons_in(c, out) end
+  return out
+end
+local function drop_main_menu(n)
+  for k, c in pairs(n.nodes or {}) do  -- pairs: these node lists have holes (`cond and node or nil`)
+    local b = buttons_in(c, {})
+    if b.go_to_menu then
+      b.go_to_menu = nil
+      if next(b) == nil then n.nodes[k] = nil else drop_main_menu(c) end
+    end
+  end
+  return n
+end
+for _, name in ipairs{'create_UIBox_game_over', 'create_UIBox_win'} do
+  local orig = _G[name]
+  _G[name] = function(...) return drop_main_menu(orig(...)) end
+end

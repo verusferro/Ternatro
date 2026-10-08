@@ -50,6 +50,7 @@ The first start takes a few seconds longer while sounds are decoded and the shad
 Mouse only: click cards and buttons, hover a card for its description. The only keys: **Ctrl+C** quits (the run is saved; use Continue), and **A / D / W / S** move the card you last clicked left / right / to the first / to the last place in its row (jokers, consumables, hand).
 
 - **Options** has the seed, **Music** (On/Off), **Sound FX** (On/Off) and **Back**. There is no New Run button there: use the palette.
+- **Game over / win:** **New Run** opens the game's own New Run screen (deck, stake, challenges). There is no Main Menu.
 - **Run Info** is the game's own: Poker Hands, Blinds and Vouchers.
 - **Reordering:** right-click a joker, consumable or hand card for Move left / right / first / last (Tern sends no mouse motion, so there is no drag).
 
