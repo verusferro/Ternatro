@@ -1,7 +1,8 @@
 -- scene.lua: walks every live UIBox (HUD, blind select, shop, cash out, overlays, tooltips ...) and packs what the
 -- game's own UI engine drew into two parallel strings; scene.py turns them into TSP nodes + a per-box stylesheet.
 --   SC.frame() -> S, F      S = structure (changes => rebuild nodes), F = per-frame geometry/colours, line i of F is line i of S
---   S lines:  B \t boxid \t layer                        a UIBox (layer u|a|c|o|p, bottom -> top draw order)
+--   S lines:  B \t boxid \t layer \t card                a UIBox (layer m|u|a|f|c|t|o|p, bottom -> top draw order;
+--                                                       card = the sort_id of the card an 'f' box belongs to)
 --             e \t id \t kind \t bid \t text \t shadow \t vert \t obj      one drawn UIElement (kind R C B T O)
 --   F lines:  B \t boxid                                  (same row as its S line)
 --             id \t vis \t x \t y \t w \t h \t scale \t r \t fill \t emb \t embcol \t shx \t shy \t shcol \t outw \t outcol \t radius \t extra
@@ -254,16 +255,17 @@ local function walk(e, S, Fo, vis_parent, ctrl)
 end
 
 -- Game:draw order: parentless Moveables (pack sparkles) < UIBoxes < card areas/cards (+ their boxes and particles)
--- < attention_text boxes < overlay menu < popups
+-- < attention_text boxes < overlay menu < popups.  A card's own boxes ('f') also return the card: they are drawn
+-- with it (Card:draw), right under its face, so Python places them in the DOM just before that card.
 local function layer_of(b)
   if b == G.OVERLAY_MENU then return 'o' end
   if b.attention_text then return 't' end
   local p = b.config and b.config.parent
   -- Card:draw draws its focus frame (card_focus_ui) before the card, except in the hand, and its price tag and
   -- buy / use buttons before its sprite too (they peek out from behind the card)
-  if p and p.children and p.children.focused_ui == b and p.area ~= G.hand then return 'f' end
+  if p and p.children and p.children.focused_ui == b and p.area ~= G.hand then return 'f', p.sort_id end
   local ch = p and p.children
-  if ch and (ch.price == b or ch.buy_button == b or ch.buy_and_use_button == b or ch.use_button == b) then return 'f' end
+  if ch and (ch.price == b or ch.buy_button == b or ch.buy_and_use_button == b or ch.use_button == b) then return 'f', p.sort_id end
   if p then
     if p.is and p:is(CardArea) then return 'a' end
     return 'c'
@@ -293,8 +295,8 @@ end
 
 local ORDER = {m = 0, u = 1, a = 2, f = 3, c = 4, t = 5, o = 6, p = 7}
 
-local function dump_box(b, layer, S, Fo)
-  S[#S + 1] = table.concat({'B', b.ID, layer}, '\t')
+local function dump_box(b, layer, S, Fo, card)
+  S[#S + 1] = table.concat({'B', b.ID, layer, card or ''}, '\t')
   Fo[#Fo + 1] = 'B\t' .. b.ID
   local ctrl = {nested = {}}
   -- UIBox:draw draws its children (attached particles) before its own UI
@@ -318,7 +320,9 @@ function SC.frame()
   local function add(b, layer)
     if seen[b] or skipped(b) or not b.states.visible then return end
     seen[b] = true
-    list[#list + 1] = {b, layer or layer_of(b)}
+    local card
+    if not layer then layer, card = layer_of(b) end
+    list[#list + 1] = {b, layer, nil, nil, card}
   end
   for _, b in ipairs(G.I.UIBOX) do
     -- a UIBox that is a UIT.O's object is drawn by its container (dump_box's `nested`), on its layer and above it
@@ -346,8 +350,8 @@ function SC.frame()
     if list[i][3] == 'P' then
       dump_emitter(b, layer, S, Fo)
     else
-      local nested = dump_box(b, layer, S, Fo)
-      for _, nb in ipairs(nested) do if not seen[nb] then seen[nb] = true; list[#list + 1] = {nb, layer, nil, #list + 1} end end
+      local nested = dump_box(b, layer, S, Fo, list[i][5])
+      for _, nb in ipairs(nested) do if not seen[nb] then seen[nb] = true; list[#list + 1] = {nb, layer, nil, #list + 1, list[i][5]} end end
     end
     i = i + 1
   end

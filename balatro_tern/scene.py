@@ -8,7 +8,9 @@ Loop contract (the integration owner calls these):
     scene = Scene(game, session, click=lambda uie_id: handler)       # once
     scene.read()                      # every loop, before building the sheets
     scene.key                         # changes iff nodes must be rebuilt
-    scene.under(), scene.over()       # nodes: below the cards (u + a layers) / above them (c, o, p layers)
+    scene.under(), scene.over()       # nodes: below the cards (m, u, a layers) / above them (c, t, o, p layers)
+    scene.card_boxes(card_id)         # node of a card's own boxes (price, buy / use / sell, layer f), or None:
+                                      # placed right before that card, as Card:draw draws them
     scene.update(sf, units)           # every loop: diffed per-box stylesheets
     scene.tip_node(card_id, sig, units)  # hidden popup subtree of a card (shown by CSS `:hover`), or None
 """
@@ -25,7 +27,7 @@ from .motion import Units
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent / "extracted"
-UNDER, OVER = ("m", "u", "a", "f"), ("c", "t", "o", "p")  # scene.lua layer_of (Game:draw order); the cards sit between
+UNDER, OVER = ("m", "u", "a"), ("c", "t", "o", "p")  # scene.lua layer_of (Game:draw order); the cards (each with its 'f' boxes) sit between
 # TEXT_OFFSET of the game's English font (G.FONTS[1]) in text-scale fractions: x = 10, y = -20 love-px * FONTSCALE / TILESIZE
 TX, TY = 10 * 0.1 / 20, -20 * 0.1 / 20
 DEG = 57.29578
@@ -74,10 +76,10 @@ class El:
 
 
 class Box:
-    __slots__ = ("id", "layer", "els", "node", "css")
+    __slots__ = ("id", "layer", "card", "els", "node", "css")
 
-    def __init__(self, bid, layer):
-        self.id, self.layer, self.els, self.node, self.css = bid, layer, [], None, None
+    def __init__(self, bid, layer, card=None):
+        self.id, self.layer, self.card, self.els, self.node, self.css = bid, layer, card, [], None, None
 
 
 # ---------------------------------------------------------------- hover tips as one image
@@ -286,6 +288,7 @@ class Scene:
         self._uitips = {}  # uie id -> (node, css)
         self._tipimg = {}  # tip content -> (blob, class, css): see _tip_from
         self.flame_content = {}  # "c" | "m" -> callable() -> node: the flame image (Shaders)
+        self._by_card = {}  # card sort_id -> its 'f' boxes, per structure
 
     def set_mute(self, music_muted, sfx_muted):
         """Labels of the Options menu's two sidecar toggles."""
@@ -304,6 +307,10 @@ class Scene:
             self._S = S
             self.key += 1
             self.boxes = self._parse_structure(S)
+            self._by_card = {}
+            for b in self.boxes:
+                if b.layer == "f" and b.card is not None:
+                    self._by_card.setdefault(b.card, []).append(b)
         self._F = F
         self._apply_frame(self.boxes, F)
 
@@ -315,7 +322,7 @@ class Scene:
                 continue
             f = line.split("\t")
             if f[0] == "B":
-                cur = Box(int(f[1]), f[2])
+                cur = Box(int(f[1]), f[2], int(f[3]) if len(f) > 3 and f[3] else None)
                 boxes.append(cur)
             else:
                 cur.els.append(El(f))
@@ -407,6 +414,18 @@ class Scene:
 
     def over(self):
         return self._layer(OVER, "scover")
+
+    def card_boxes(self, card_id):
+        """A card's price tag / buy / use / sell buttons / focus frame (layer 'f') as one node, or None.  Card:draw draws
+        them right before the card's face, so they peek out from behind it yet cover the cards drawn earlier: the
+        caller puts this node just before the card's own."""
+        bs = self._by_card.get(card_id)
+        if not bs:
+            return None
+        for b in bs:
+            if b.node is None:
+                b.node = self._box_node(b)
+        return ui.html.div(*[b.node for b in bs], class_="scroot scfb", key=f"f{card_id}")
 
     # ------------------------------------------------------------------ css
     def update(self, sf, u):

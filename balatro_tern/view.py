@@ -147,7 +147,7 @@ def layout_css(ctx):
     # margins the extra width shows the background; the room doesn't clip, so the overlay's dim covers that too
     return (f".stage{{font-size:min(calc({kw:.5f} * var(--sf-cw)),calc({kh:.5f} * var(--sf-lh)));width:{ctx.W:.4f}em;height:{ctx.H:.4f}em}}"
             f".room{{position:relative;margin:0 auto;width:{ctx.W:.4f}em;height:{ctx.H:.4f}em}}"
-            f".mc{{position:absolute;left:0;top:0;width:{CARD_W:.4f}em;height:{CARD_H:.4f}em}}"
+            f".mc,.mt{{position:absolute;left:0;top:0;width:{CARD_W:.4f}em;height:{CARD_H:.4f}em}}"
             f".ci .sf-image{{width:{CARD_W:.4f}em;height:{CARD_H:.4f}em}}")  # the face only, not glyphs in the card's tooltip
 
 
@@ -156,23 +156,29 @@ MOVABLE = ("jokers", "consumeables", "hand")  # rows the game lets you drag to r
 
 
 def stage_card(card, face, dis, ctx, tip, ovl=False, movable=False):
-    """Table card: .mc.m<id> (game VT left/top/transform, per-frame) > .sh (shadow) > .ci (hover, edition) > image;
-    tip = Scene's hidden card popup (shown by :hover).  movable: right-click menu to reorder (the game's drag)."""
+    """Table card: .mc.m<id> (game VT left/top/transform, per-frame) > .sh (shadow) > .ci (hover, edition) > image,
+    and its popup: tip = Scene's hidden card popup, in a `.mt.m<id>` sibling right after the card (same per-frame
+    rule) that `.mc:hover + .mt` shows above everything: a hovered card itself is never raised (CardArea:draw keeps
+    the order), so it cannot cover its neighbours' clicks.  movable: right-click menu to reorder (the game's drag).
+    -> [card node, tip node or nothing]"""
     cls = ["ci"]
     menu = {m: ctx.input.on_move(card["id"], m[5:]) for m in MOVES} if movable else None
     img = ui.image(ctx.faces.blob(card, face, dis),
                    w=round(CARD_W * ctx.Upx), h=round(CARD_H * ctx.Upx), alt=card.get("name") or card["key"],
                    role="card", on_click=ctx.input.on_click("card", card["id"]), on_menu=menu)
-    return ui.html.div(ui.html.div(ui.html.div(img, class_=" ".join(cls), key="ci"), class_="sh", key="sh"), tip,
-                       class_=f"mc m{card['id']}{' ovc' if ovl else ''}", key=f"c{card['id']}")
+    ov = " ovc" if ovl else ""
+    node = ui.html.div(ui.html.div(ui.html.div(img, class_=" ".join(cls), key="ci"), class_="sh", key="sh"),
+                       class_=f"mc m{card['id']}{ov}", key=f"c{card['id']}")
+    return [node] if tip is None else [node, ui.html.div(tip, class_=f"mt m{card['id']}{ov}", key=f"t{card['id']}")]
 
 
 AREA_NAMES = ("deck", "discard", "shop_jokers", "shop_vouchers", "shop_booster", "hand", "consumeables", "jokers", "play", "pack_cards", "misc")
 
 
 def table(snap, game, ctx):
-    """The whole screen is one `.room`: Scene's UIBoxes under the cards, the cards at their VT, then Scene's
-    card-attached boxes, attention_text popups, overlays and tooltips above them (Game:draw order)."""
+    """The whole screen is one `.room`: Scene's UIBoxes under the cards, the cards at their VT in the game's draw order
+    (each after its own price tag / buy / use / sell boxes, Card:draw), then Scene's card-attached boxes,
+    attention_text popups, overlays and tooltips above them (Game:draw order)."""
     if not snap.get("hud"):
         return ui.text("No run", key="norun")
     fr, sc = ctx.fr, ctx.scene
@@ -182,9 +188,12 @@ def table(snap, game, ctx):
     for fc in (fr.cards if fr else ()):
         c = where.get(fc["id"])
         if c:
+            boxes = sc.card_boxes(c["id"])
+            if boxes is not None:
+                cards.append(boxes)
             # the area is part of the tip key: Card:align_h_popup points left in the shop, below on the top row (jokers), above elsewhere
-            cards.append(stage_card(c, fc["face"], fc["dis"], ctx, sc.tip_node(c["id"], (fc["sig"], fc["area"]), u), fc["area"] == "misc",
-                                    fc["area"] in MOVABLE))
+            cards += stage_card(c, fc["face"], fc["dis"], ctx, sc.tip_node(c["id"], (fc["sig"], fc["area"]), u), fc["area"] == "misc",
+                                fc["area"] in MOVABLE)
     return ui.html.div(
         sc.under(), *cards, sc.over(),
         *[n for n in (h(snap, game, ctx) for h in motion.NODE_HOOKS) if n is not None],

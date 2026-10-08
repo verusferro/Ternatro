@@ -2,7 +2,7 @@
 -- Loaded by motion.py into the Game's Lua runtime after boot. BT.frame() returns ONE string, tab/newline separated:
 --   T real roomx roomy roomr   room offset incl. screen shake (game units / radians)
 --   S a|b|c ...                structure signature: HUD scalars the Python side re-snapshots on
---   c id area idx x y w h r scale facing hl dissolve sig   one per drawn card (VT, game units)
+--   c id area idx x y w h r scale facing hl dissolve sig   one per drawn card (VT, game units), in CardArea:draw order
 --   a name x y w h             CardArea rects
 --   f chips_real chips_timer mult_real mult_timer c1 c2 (chips) c1 c2 (mult)   flame handler state
 --   b x y w h                  play/sort/discard UIBox
@@ -10,12 +10,25 @@
 local fmt = string.format
 
 local AREAS = {'deck', 'discard', 'shop_jokers', 'shop_vouchers', 'shop_booster', 'hand', 'consumeables', 'jokers', 'play', 'pack_cards'}  -- DOM/z order, last on top
+local HL_LAST = {joker = true, consumeable = true, shop = true, title_2 = true}
 local function rgb(c) return fmt('%02x%02x%02x', math.floor(c[1] * 255 + .5), math.floor(c[2] * 255 + .5), math.floor(c[3] * 255 + .5)) end
 
 local function card_sig(c)
   local b = c.base
   return (c.config.center_key or '?') .. '.' .. (b and (b.suit or '') .. (b.value or '') or '') .. '.' ..
     (c.edition and c.edition.type or '') .. '.' .. (c.seal or '') .. '.' .. (c.debuff and 'd' or '') .. ((c.dissolve or 0) > 0.005 and 'x' or '') .. (c.ability and (tostring(c.ability.perma_bonus) .. tostring(c.ability.mult) .. tostring(c.ability.x_mult) .. tostring(c.ability.t_mult) .. tostring(c.ability.t_chips) .. (type(c.ability.extra) == 'number' and tostring(c.ability.extra) or '')) or '')
+end
+
+local function emit_card(o, name, a, i, c)
+  local vt = c.VT
+  local draw = c.states.visible
+  if (name == 'deck' or name == 'discard') and draw and not (name == 'deck' and i > #a.cards - 3) and math.abs(vt.x - c.T.x) < .02
+    and math.abs(vt.y - c.T.y) < .02 and math.abs(vt.r - c.T.r) < .01 then draw = false end  -- settled pile: only its top shows
+  if draw then
+    o[#o + 1] = fmt('c\t%d\t%s\t%d\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%s\t%d\t%.3f\t%s', c.sort_id, name, i, vt.x, vt.y,
+      vt.w, vt.h, vt.r, vt.scale, c.sprite_facing == 'back' and 'b' or 'f', c.highlighted and 1 or 0,
+      math.abs(c.dissolve or 0), card_sig(c))
+  end
 end
 
 function BT.frame()
@@ -40,16 +53,13 @@ function BT.frame()
     if a and not a.REMOVED and a.cards then
       local at = a.T
       o[#o + 1] = fmt('a\t%s\t%.4f\t%.4f\t%.4f\t%.4f', name, at.x, at.y, at.w, at.h)
-      local settled_only = (name == 'deck' or name == 'discard')
-      for i, c in ipairs(a.cards) do
-        local vt = c.VT
-        local draw = c.states.visible
-        if settled_only and draw and not (name == 'deck' and i > #a.cards - 3) and math.abs(vt.x - c.T.x) < .02 and math.abs(vt.y - c.T.y) < .02 and math.abs(vt.r - c.T.r) < .01 then draw = false end
-        if draw then
-          o[#o + 1] = fmt('c\t%d\t%s\t%d\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%s\t%d\t%.3f\t%s', c.sort_id, name, i, vt.x, vt.y,
-            vt.w, vt.h, vt.r, vt.scale, c.sprite_facing == 'back' and 'b' or 'f', c.highlighted and 1 or 0,
-            math.abs(c.dissolve or 0), card_sig(c))
-        end
+      -- CardArea:draw: joker / consumeable / shop rows draw their highlighted cards last, so a selected card and the
+      -- USE / SELL / BUY buttons that peek out from behind it sit above its neighbours (and take their clicks)
+      if HL_LAST[a.config.type] then
+        for i, c in ipairs(a.cards) do if not c.highlighted then emit_card(o, name, a, i, c) end end
+        for i, c in ipairs(a.cards) do if c.highlighted then emit_card(o, name, a, i, c) end end
+      else
+        for i, c in ipairs(a.cards) do emit_card(o, name, a, i, c) end
       end
     end
   end
