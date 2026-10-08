@@ -17,6 +17,7 @@ Loop contract (the integration owner calls these):
 """
 import io
 import math
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -227,12 +228,20 @@ def _paint_card(cv, c, P, ox, oy):
     sw, sh = w * (s or 1.0), h * (s or 1.0)
     im = im.resize((max(1, round(sw * P)), max(1, round(sh * P))), Image.NEAREST)
     pos = (round((x + (w - sw) / 2 - ox) * P), round((y + (h - sh) / 2 - oy) * P))
+    off = round(0.05 * P)  # the table's drop shadow, below the card
+    # a card-sized layer (room for the shadow and the rotated corners), not a canvas-sized one: rotating whole-tip layers
+    # was most of Run Info's open time (one per poker hand example card)
+    m = off + (math.ceil(math.hypot(*im.size) / 2) - min(im.size) // 2 if r else 0)
     shadow = Image.new("RGBA", im.size, (0, 0, 0, 0))
     shadow.putalpha(im.getchannel("A").point(lambda a: a * 0.3))
-    lay = Image.new("RGBA", cv.size)
-    lay.alpha_composite(shadow, (pos[0], pos[1] + round(0.05 * P)))
-    lay.alpha_composite(im, pos)
-    cv.alpha_composite(_xform(lay, (x + w / 2 - ox) * P, (y + h / 2 - oy) * P, r, 1.0) if r else lay)
+    lay = Image.new("RGBA", (im.width + 2 * m, im.height + 2 * m))
+    lay.alpha_composite(shadow, (m, m + off))
+    lay.alpha_composite(im, (m, m))
+    if r:  # CSS clockwise radians about the card's centre; PIL rotates counter-clockwise
+        lay = lay.rotate(-math.degrees(r), Image.BICUBIC, center=(m + im.width / 2, m + im.height / 2))
+    x0, y0 = pos[0] - m, pos[1] - m
+    sx, sy = max(0, -x0), max(0, -y0)
+    cv.alpha_composite(lay, (x0 + sx, y0 + sy), (sx, sy))
 
 
 
@@ -276,7 +285,7 @@ def raster_tip(els, P, sprite, cards=()):
     if not bb:
         return None
     out = io.BytesIO()
-    cv.crop(bb).save(out, "PNG")
+    cv.crop(bb).save(out, "PNG", compress_level=1)  # a local blob: fast beats small (Run Info bakes ~9 tips at once)
     return out.getvalue(), ox + bb[0] / P, oy + bb[1] / P, (bb[2] - bb[0]) / P, (bb[3] - bb[1]) / P
 
 
@@ -311,6 +320,7 @@ class Scene:
         self._tint = set()
         self._texts = []  # (box, El) of every T / DynaText element, per structure
         self._by_card = {}  # card sort_id -> its 'f' boxes, per structure
+        self._tip_spent, self._tip_wait = 0.0, False  # UI tip bakes this frame (s); some were put off to the next frame
 
     def set_mute(self, music_muted, sfx_muted):
         """Labels of the Options menu's two sidecar toggles."""
@@ -336,6 +346,13 @@ class Scene:
     def read(self):
         S, F = self.SC.frame()
         S, F = str(S), str(F)
+        self._tip_spent = 0.0
+        if self._tip_wait:  # tips put off last frame (tip_uie's budget): rebuild their boxes, which bakes the next ones
+            self._tip_wait = False
+            for b in self.boxes:
+                if any(e.tip and e.id not in self._uitips for e in b.els):
+                    b.node = None
+            self.key += 1
         if S != self._S:
             self._S = S
             self.key += 1
@@ -774,11 +791,17 @@ class Scene:
         return hit[0]
 
     def tip_uie(self, uid):
-        """Hidden tooltip of a UIElement / Tag sprite (the game's own UIBox), shown by `.scht:hover > .sctip`."""
+        """Hidden tooltip of a UIElement / Tag sprite (the game's own UIBox), shown by `.scht:hover > .sctip`.  Bakes
+        take ~12 ms of a frame at most (Run Info's poker hands paint 9 tips with cards): the rest come next frames."""
         hit = self._uitips.get(uid)
         if hit is None:
+            if self._tip_spent > 0.012:
+                self._tip_wait = True
+                return None
+            t = time.perf_counter()
             S, F, *K = self.SC.tip_uie(uid)
             self._uitips[uid] = hit = self._tip_from(str(S), str(F), f"utip{uid}", K=str(K[0]) if K else "")
+            self._tip_spent += time.perf_counter() - t
         return hit[0]
 
     def tips_sheet(self, sf, live_ids):
