@@ -130,9 +130,15 @@ def main(continue_run=False, seed=None, speed=2.0):
     errlog = open(Path(DATA_DIR) / "errors.log", "a")
     snd = Sound()
 
+    blob_file = Path(DATA_DIR) / "blobs.txt"  # ids sent to Tern, which keeps blobs on disk across program restarts
+
+    def save_blobs():
+        blob_file.write_text("\n".join(session._blobs_sent))
+
     def hangup(signum, _frame):  # pane closed / killed: the pty is gone, so skip the SDK's goodbye writes, stop the sound now
         if snd.proc:
             snd.proc.kill()
+        save_blobs()
         os._exit(128 + signum)
     for name in ("SIGHUP", "SIGTERM", "SIGINT", "SIGBREAK"):  # SIGHUP is Unix-only, SIGBREAK Windows-only
         if (s := getattr(signal, name, None)) is not None:
@@ -150,6 +156,10 @@ def main(continue_run=False, seed=None, speed=2.0):
                 return raw_sheet(name, css, *a, **k)
             sf.stylesheet = counted
         sf.stylesheet("balatro", CSS)
+        if session.caps.has("blobs") and blob_file.exists():  # skip resending what Tern still holds from earlier runs
+            ids = blob_file.read_text().split()
+            for i in range(0, len(ids), 2000):  # ~135 KB per query, under the 256 KiB APC cap
+                session._blobs_sent.update(session.blobs(ids[i:i + 2000]))
         ctx = view.Ctx(session)
         cols, cell = session.caps.cols, session.caps.cell
         if cols:
@@ -186,7 +196,7 @@ def main(continue_run=False, seed=None, speed=2.0):
         debug(game, scene)
         ctx.ox, ctx.oy = motion.room_orig()
         ctx.resize(cols, cell)
-        last, last_title, running = None, None, True
+        last, last_title, running, shown = None, None, True, True
         last_key, last_scene, last_sheets, layout = None, None, {}, None
         t_sheet, last_drift = 0.0, None
         stats = {"t": time.monotonic(), "sheets": 0, "frames": 0, "renders": 0, "cpu": time.process_time()}
@@ -205,8 +215,12 @@ def main(continue_run=False, seed=None, speed=2.0):
                         break
                     if not (item.ctrl or item.alt or item.meta):
                         inp.key(item.name)
-                elif type(item).__name__ == "ResizeEvent":
-                    ctx.resize(item.cols, item.cell)
+                elif type(item).__name__ in ("ResizeEvent", "VisibleEvent"):
+                    if item.visible is not None and item.visible != shown:  # hidden tab: the game runs on, nothing is drawn
+                        shown = item.visible
+                        ctx.dirty = True
+                    if type(item).__name__ == "ResizeEvent":
+                        ctx.resize(item.cols, item.cell)
                 elif type(item).__name__ == "ErrorEvent":
                     errlog.write(f"{item.sheet}: {item.msg}\n")
                     errlog.flush()
@@ -232,6 +246,8 @@ def main(continue_run=False, seed=None, speed=2.0):
             feed = game.drain_feed()
             for e in feed:
                 snd.handle(e)
+            if not shown:
+                continue
             fr = motion.read()
             scene.read()
             if fr and fr.flames and last:
@@ -305,3 +321,4 @@ def main(continue_run=False, seed=None, speed=2.0):
                     lf.write(f"[{os.getpid()}]   top sheets B/s: " + " ".join(f"{k}={v / dt:.0f}" for k, v in top) + "\n")
                 sent.update(n=0, b=0, by={})
         snd.close()
+        save_blobs()

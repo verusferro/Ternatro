@@ -56,6 +56,7 @@ class Ctx:
         self.flames = {}  # 'c' | 'm' -> (level, blob id)
         self.mute = (False, False)  # (music, sfx) muted; set by app each loop
         self.toggle = lambda kind: None  # app: toggle "music"/"sfx", persist
+        self._bids = {}  # card_png key -> blob id
         self.resize(None, None)
 
     @property
@@ -70,7 +71,11 @@ class Ctx:
         self.dirty = True
 
     def blob(self, png):
-        return self.session.blob(png[1], "image/png")
+        """Blob id of a (cache key, PNG) pair: session.blob hashes and base64-encodes on every call, sent or not."""
+        bid = self._bids.get(png[0])
+        if bid is None:
+            bid = self._bids[png[0]] = self.session.blob(png[1], "image/png")
+        return bid
 
     def resize(self, cols, cell):
         """Tern reports the cell size rounded, so the fit itself is CSS (layout_css); here only the pane's size in cells
@@ -100,7 +105,7 @@ class Faces:
     def __init__(self, ctx):
         from concurrent.futures import ThreadPoolExecutor
         self.ctx, self.pool = ctx, ThreadPoolExecutor(2)
-        self.done, self.pending, self.dis = {}, set(), {}
+        self.done, self.pending, self.dis, self.ids = {}, set(), {}, {}  # ids: bake key -> blob id
 
     def _bake(self, key, card, kw):
         if key in self.done or key in self.pending:
@@ -137,7 +142,11 @@ class Faces:
             kw = dict(card_id=cid)
         self._bake(key, card, kw)
         res = self.done.get(key)
-        return ctx.session.blob(res[1], res[2]) if res else plain()
+        if not res:
+            return plain()
+        if key not in self.ids:
+            self.ids[key] = ctx.session.blob(res[1], res[2])
+        return self.ids[key]
 
 
 def layout_css(ctx):
