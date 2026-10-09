@@ -63,5 +63,6 @@ Mouse only. **Ctrl+C** quits (the run is saved). **A / D / W / S** move the last
 ## Notes
 
 - Data folder (saves, caches, `errors.log`): `%LOCALAPPDATA%\balatro-tern`, `~/Library/Application Support/balatro-tern` or `~/.local/share/balatro-tern`. Saves don't mix with the real game's. Everything is unlocked.
+- The first start bakes all 35 backgrounds in the background at idle priority (about 3 min on 12 cores, about 600 MB in the data folder). Until a background is ready, a plain one shows.
 - Headless test: `uv run --project <repo> python tools/bot.py --seeds 2`.
 - Personal use only. Balatro belongs to LocalThunk / Playstack.

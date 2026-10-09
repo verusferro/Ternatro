@@ -71,11 +71,8 @@ def start_bakes(session, ctx, snap, game, state):
     import threading
 
     def bg_job(name, boss):
-        try:  # background.fs's grid: 700 cells along the wide stage's diagonal, one px per cell; the tall stage shows it cropped
-            W, H = ctx.wide
-            ln = (W ** 2 + H ** 2) ** .5
-            # the 4th item collects the tiles' blob ids as the loop sends them
-            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, (round(700 * W / ln), round(700 * H / ln))), [])
+        try:  # the 4th item collects the tiles' blob ids as the loop sends them
+            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, ctx.bg_size), [])
         except Exception as e:  # keep the CSS swirl
             state["err"] = repr(e)
 
@@ -206,7 +203,12 @@ def main(continue_run=False, seed=None, speed=2.0):
             game.new_run(seed)
         debug(game, scene)
         ctx.ox, ctx.oy = motion.room_orig()
-        ctx.wide = ctx.W, ctx.H  # the wide layout's stage: the swirl is baked for it, the tall stage shows it cropped (bg_css)
+        W, H = ctx.wide = ctx.W, ctx.H  # the wide layout's stage: the swirl is baked for it, the tall stage shows it cropped (bg_css)
+        ln = (W ** 2 + H ** 2) ** .5  # background.fs's grid: 700 cells along the diagonal, one px per cell
+        ctx.bg_size = round(700 * W / ln), round(700 * H / ln)
+        bosses = sorted({"#" + view.boss_colour({"hud": {"blind": {"key": k}}}, game) for k, b in game.G.P_BLINDS.items() if b.boss})
+        jobs = [(n, None, ctx.bg_size) for n in ("small", "tarot", "planet", "buffoon", "standard", "spectral", "won")]
+        threading.Thread(target=shaders.bg_prebake, args=(jobs + [("boss", c, ctx.bg_size) for c in bosses],), daemon=True).start()
         ctx.resize(cols, cell)
         last, last_title, running, shown = None, None, True, True
         last_key, last_scene, last_sheets, layout = None, None, {}, None

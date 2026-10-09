@@ -598,15 +598,8 @@ def bg_bake(name, boss=None, **kw):
     return bake("background", bg_set(name, boss), **kw)
 
 
-def bg_tiles(name, boss, size, fps=15):
-    """background.fs at its own grid (size = cells, one px each), cut into a cols x rows mosaic of looping WebPs so
-    every tile stays under Tern's per-image ceiling (1024 frames / 64 MiB decoded) at `fps`.  Tern starts an
-    animation when the image first draws, on the window's clock: tiles mounted in one render stay in step.
-    Lossless: the swirl is a few hundred mixes of three colours, and a lossy encoder (q82 was ~2 KiB a frame) smears
-    its one-cell detail into blocky blur once Tern scales the cells up.  The frames share one palette of <= 256 of
-    their own colours (median cut of a sample; at most a few levels off where a state has more), so WebP's lossless
-    palette mode keeps them at ~20-45 KiB a frame.
-    -> [(key, bytes, mime, x0, y0, x1, y1)] with the tile's cell rect.  Cached on disk like bake()."""
+def _bg_plan(name, boss, size, fps=15):
+    """(uniforms, frames, tile rects, cache key, tile files) of a swirl bake."""
     w, h = size
     p = bg_set(name, boss)
     N = min(1024, round(BG_PERIOD * fps))
@@ -621,7 +614,19 @@ def bg_tiles(name, boss, size, fps=15):
     ys = [h * j // rows for j in range(rows + 1)]
     rects = [(xs[i], ys[j], xs[i + 1], ys[j + 1]) for j in range(rows) for i in range(cols)]
     key = hashlib.sha1(json.dumps([VERSION, "bgtiles-pal", _norm(p), size, N], sort_keys=True, default=str).encode()).hexdigest()[:24]
-    files = [CACHE / f"bgt-{key}-{n}.webp" for n in range(len(rects))]
+    return p, N, rects, key, [CACHE / f"bgt-{key}-{n}.webp" for n in range(len(rects))]
+
+def bg_tiles(name, boss, size, fps=15):
+    """background.fs at its own grid (size = cells, one px each), cut into a cols x rows mosaic of looping WebPs so
+    every tile stays under Tern's per-image ceiling (1024 frames / 64 MiB decoded) at `fps`.  Tern starts an
+    animation when the image first draws, on the window's clock: tiles mounted in one render stay in step.
+    Lossless: the swirl is a few hundred mixes of three colours, and a lossy encoder (q82 was ~2 KiB a frame) smears
+    its one-cell detail into blocky blur once Tern scales the cells up.  The frames share one palette of <= 256 of
+    their own colours (median cut of a sample; at most a few levels off where a state has more), so WebP's lossless
+    palette mode keeps them at ~20-45 KiB a frame.
+    -> [(key, bytes, mime, x0, y0, x1, y1)] with the tile's cell rect.  Cached on disk like bake()."""
+    w, h = size
+    p, N, rects, key, files = _bg_plan(name, boss, size, fps)
     if not all(f.exists() for f in files):
         c1, c2, c3 = (_col(p[k]) for k in ("colour_1", "colour_2", "colour_3"))
         frames = []
@@ -638,6 +643,22 @@ def bg_tiles(name, boss, size, fps=15):
             tmp.write_bytes(data)
             tmp.replace(f)
     return [(f"{key}-{n}", f.read_bytes(), "image/webp", *r) for n, (f, r) in enumerate(zip(files, rects))]
+
+
+def _bake_one(job):
+    if hasattr(os, "nice"):
+        os.nice(19)  # idle priority: the game and Tern keep the CPU
+    bg_tiles(*job)
+
+
+def bg_prebake(jobs):
+    """Bake every (name, boss, size) swirl not yet on disk, on all cores but two, so a state's background is ready
+    before its first appearance (~30 s of one core each, cached for good).  Blocks: run it on a thread."""
+    from concurrent.futures import ProcessPoolExecutor
+    jobs = [j for j in jobs if not all(f.exists() for f in _bg_plan(*j)[4])]
+    if jobs:
+        with ProcessPoolExecutor(max(1, (os.cpu_count() or 2) - 2)) as ex:
+            list(ex.map(_bake_one, jobs))
 
 
 def card_effects(card):
