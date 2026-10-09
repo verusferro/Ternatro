@@ -1,7 +1,7 @@
 -- The plugin lives at <repo>/plugin. Launch is `uv run --project <repo> balatro-tern` on every OS.
 -- Exception: a Windows Tern window linked over \\wsl.localhost\<distro>\... (shown as \\?\UNC\wsl.localhost\...,
 -- or \\wsl$\...) has a WSL shell, which sees that path as /... and runs <repo>/bin/balatro-tern.
--- cx.layout:new_tab takes a command *line* for the tab's login shell (no argv), so quote with double
+-- cx.layout:split / new_tab take a command *line* for the pane's login shell (no argv), so quote with double
 -- quotes: valid in cmd, PowerShell and sh for paths without $ or " (ponytail: no escaping beyond that).
 local dir = string.gsub(tern.plugin.dir, "^\\\\%?\\", "")
 local wsl = string.match(dir, "[\\/]wsl[%.%$][^\\/]*[\\/][^\\/]+([\\/].*)$")
@@ -13,8 +13,13 @@ else
 	base = 'uv run --project "' .. repo .. '" balatro-tern'
 end
 
+-- opens beside the focused pane in the current tab; a new tab only when no pane has the focus
 local function launch(cx, args)
-	cx.layout:new_tab({ command = base .. args })
+	local launch_ = { command = base .. args }
+	local focused = cx.session:focused()
+	if not (focused and cx.layout:split(focused, "right", launch_)) then
+		cx.layout:new_tab(launch_)
+	end
 end
 
 tern.command({
