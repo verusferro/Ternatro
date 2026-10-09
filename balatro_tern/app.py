@@ -37,14 +37,16 @@ def title(snap):
 def render_all(sf, snap, game, ctx):
     """Rebuild the node tree: backdrop + the room (Scene boxes, cards, popups)."""
     if ctx.bg:  # background.fs mosaic (shaders.bg_tiles): placed by the `bgtiles` sheet, mounted together so they animate in step
-        swirl = ui.html.div(*[ui.html.div(ui.image(b, alt="", class_="bgimg"), class_=f"bgt bgt{i}", key=f"bgt{i}")
-                              for i, b in enumerate(ctx.bg)], class_="swirl", key="swirl")
+        tiles = [ui.html.div(ui.image(b, alt=""), class_=f"bgt bgt{i}", key=f"bgt{i}") for i, b in enumerate(ctx.bg)]
+        swirl = ui.html.div(ui.html.div(*tiles, class_="bgm", key="bgm"), class_="swirl", key="swirl")
     else:
         swirl = ui.html.div(class_="swirl", key="swirl")
     stage = ui.html.div(swirl, ui.html.div(view.table(snap, game, ctx), class_="fg", key="fg"), class_="stage", key="stage")
-    if getattr(ctx, "bg_css", None) and ctx.bg_css != getattr(ctx, "bg_css_sent", None):
-        ctx.bg_css_sent = ctx.bg_css
-        sf.stylesheet("bgtiles", ctx.bg_css)
+    if ctx.bg:
+        css = bg_css(ctx)
+        if css != getattr(ctx, "bg_css_sent", None):
+            ctx.bg_css_sent = css
+            sf.stylesheet("bgtiles", css)
     sf.render(main=ui.col(stage))
     # popups of the cards the player can reach: the overlay's own (deck view) while it shows any, else the table's
     # (every popup's rules count against Tern's 256 KiB of sheets per surface)
@@ -53,15 +55,35 @@ def render_all(sf, snap, game, ctx):
     ctx.scene.tips_sheet(sf, ids)
 
 
+def bg_css(ctx):
+    """Placement of the swirl mosaic: tiles in percent of `.bgm`, which is the stage's height and at least its width,
+    at least as wide as the bake's aspect wants (centred, the sides cropped).  The stage is the pane's full width, so an
+    exact-size bake fills it as before; a wide bake on the tall stage covers it.  Tern paints every raster image with a
+    6px corner radius and a faint ring, so tiles overlap by 8px and the mosaic bleeds 8px past the stage's edges."""
+    W, H = ctx.bg_rects[-1][5], ctx.bg_rects[-1][6]
+    return (f".bgm{{width:max(calc(100% + 16px),{ctx.H * W / H:.4f}em)}}" +
+            "".join(f".bgt{i}{{left:{t[3] / W * 100:.4f}%;top:{t[4] / H * 100:.4f}%;width:calc({(t[5] - t[3]) / W * 100:.4f}% + 8px);"
+                    f"height:calc({(t[6] - t[4]) / H * 100:.4f}% + 8px)}}" for i, t in enumerate(ctx.bg_rects)))
+
+
 def start_bakes(session, ctx, snap, game, state):
     """Background-thread Shaders bakes: swirl per state, flame loops per (kind, level). Results land in ctx (picked up next loop)."""
     import threading
 
     def bg_job(name, boss):
         try:
-            ln = (ctx.W ** 2 + ctx.H ** 2) ** .5  # background.fs's grid: 700 cells along the diagonal, one px per cell
+            def size(W, H):  # background.fs's grid: 700 cells along the diagonal, one px per cell
+                ln = (W ** 2 + H ** 2) ** .5
+                return round(700 * W / ln), round(700 * H / ln)
+            exact = size(ctx.W, ctx.H)
             # the 4th item collects the tiles' blob ids as the loop sends them
-            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, size=(round(700 * ctx.W / ln), round(700 * ctx.H / ln))), [])
+            tiles = shaders.bg_tiles(name, boss, exact, cached_only=True)
+            if tiles is None:
+                wide = shaders.bg_tiles(name, boss, size(*ctx.wide), cached_only=True)  # shown at once, covering, until the exact bake lands
+                if wide:
+                    ctx.bg_next = (name, boss, wide, [])
+                tiles = shaders.bg_tiles(name, boss, exact)
+            ctx.bg_next = (name, boss, tiles, [])
         except Exception as e:  # keep the CSS swirl
             state["err"] = repr(e)
 
@@ -81,12 +103,9 @@ def start_bakes(session, ctx, snap, game, state):
             t = tiles[len(ids)]
             ids.append(session.blob(t[1], t[2]))
             return
-        ctx.bg_next = None
-        W, H = tiles[-1][5], tiles[-1][6]
-        ctx.bg = ids
-        ctx.bg_css = "".join(  # percent of the stage, a hair of overlap so no seam shows between tiles
-            f".bgt{i}{{left:{t[3] / W * 100:.4f}%;top:{t[4] / H * 100:.4f}%;width:{(t[5] - t[3]) / W * 100 + .02:.4f}%;"
-            f"height:{(t[6] - t[4]) / H * 100 + .02:.4f}%}}" for i, t in enumerate(tiles))
+        if ctx.bg_next is nxt:
+            ctx.bg_next = None
+        ctx.bg, ctx.bg_rects = ids, tiles
         ctx.dirty = True
 
 
@@ -195,6 +214,7 @@ def main(continue_run=False, seed=None, speed=2.0):
             game.new_run(seed)
         debug(game, scene)
         ctx.ox, ctx.oy = motion.room_orig()
+        ctx.wide = ctx.W, ctx.H  # the wide layout's stage: its cached swirl covers the tall stage while the exact bake runs
         ctx.resize(cols, cell)
         last, last_title, running, shown = None, None, True, True
         last_key, last_scene, last_sheets, layout = None, None, {}, None
@@ -248,6 +268,9 @@ def main(continue_run=False, seed=None, speed=2.0):
                 snd.handle(e)
             if not shown:
                 continue
+            if ctx.want_tall != ctx.tall and scene.SC.set_layout(ctx.want_tall):  # false while the game is busy: retried next loop
+                ctx.apply_layout(ctx.want_tall, *motion.room_orig())
+                bake_state.pop("bg", None)  # re-bake the swirl for the new W x H; the old one stays until it lands
             fr = motion.read()
             scene.read()
             if fr and fr.flames and last:
@@ -278,8 +301,8 @@ def main(continue_run=False, seed=None, speed=2.0):
                 last = game.snapshot()
             if ctx.dirty or fr is None or fr.key != last_key or scene.key != last_scene:
                 ctx.fr = fr
-                if layout != ctx.fit:
-                    layout = ctx.fit
+                if layout != (ctx.fit, ctx.W, ctx.H):
+                    layout = ctx.fit, ctx.W, ctx.H
                     sf.stylesheet("layout", view.layout_css(ctx))
                 ctx.dirty = False
                 last_key, last_scene = (fr.key if fr else None), scene.key

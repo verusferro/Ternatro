@@ -1,7 +1,8 @@
 /* balatro-tern surface stylesheet. Backdrop is a Shaders image (app.render_all); everything else is Scene/Motion. */
 /* CRT.fs tone curve only (bloom off): out = (tex - .55)*g + .5, g = 1.14 + .012*crt -> contrast(c) brightness(g/c). No warp/scanlines. (Not one folded matrix: contrast clamps at 1 before the brightness scales it, a single matrix would not.) */
 .stage { position: relative; margin: 0 auto; overflow: hidden; filter: contrast(1.297) brightness(.885); }  /* size: view.layout_css */
-.swirl { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; background: #50846e; pointer-events: none; }
+.swirl { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; background: #50846e; pointer-events: none; overflow: hidden; }
+.bgm { position: absolute; top: -8px; left: 50%; height: calc(100% + 16px); transform: translateX(-50%); }  /* the mosaic's box: width from the `bgtiles` sheet (app.bg_css) */
 .bgt { position: absolute; overflow: hidden; }  /* background.fs mosaic tile, placed by the `bgtiles` sheet */
 .swirl .sf-image, .swirl .sf-img-frame { display: block; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: fill; image-rendering: pixelated; }
 .fg { position: relative; z-index: 1; }
