@@ -61,6 +61,8 @@ py -3.12 -m venv "$env:LOCALAPPDATA\balatro-tern\venv"
 
 The first start takes a few seconds longer while sounds are decoded and the shaders are baked. Both are cached in the data folder.
 
+In a narrow pane (about 40% of the screen's width or less) the HUD moves under the table.
+
 ## Controls
 
 Mouse only: click cards and buttons, hover a card for its description. The only keys: **Ctrl+C** quits (the run is saved; use Continue), and **A / D / W / S** move the card you last clicked left / right / to the first / to the last place in its row (jokers, consumables, hand).
@@ -72,7 +74,7 @@ Mouse only: click cards and buttons, hover a card for its description. The only 
 
 ## Notes
 
-- Data folder (saves, caches, `errors.log`, `prefs.json`): Windows `%LOCALAPPDATA%\balatro-tern`, macOS `~/Library/Application Support/balatro-tern`, Linux/WSL `${XDG_DATA_HOME:-~/.local/share}/balatro-tern`. The run save is `1/save.jkr` there. It is not compatible with the real game's saves. Everything is unlocked.
+- Data folder (saves, caches, `errors.log`, `prefs.json`, `blobs.txt`): Windows `%LOCALAPPDATA%\balatro-tern`, macOS `~/Library/Application Support/balatro-tern`, Linux/WSL `${XDG_DATA_HOME:-~/.local/share}/balatro-tern`. The run save is `1/save.jkr` there. It is not compatible with the real game's saves. Everything is unlocked.
 - The game quits on a closed pane, SIGHUP, SIGTERM, SIGINT (Windows: SIGBREAK) and when the terminal ends. Its sound process ends with it.
 - Tern can't load fonts, so text is drawn as images of the game's own font.
 - To test without Tern: `uv run --project <repo> python tools/bot.py --seeds 2` plays full runs headless.
