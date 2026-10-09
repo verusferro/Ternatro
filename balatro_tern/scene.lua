@@ -744,7 +744,7 @@ function create_UIBox_HUD()
                 {n=G.UIT.R, config={align = "cm", id = 'row_blind', minw = 4.93, minh = 3.64}, nodes={}},
               }},
               {n=G.UIT.C, config={minw = 0.45}, nodes={}},
-              {n=G.UIT.C, config={align = "cm"}, nodes={contents.dollars_chips, contents.hand}},
+              {n=G.UIT.C, config={align = "cm"}, nodes={contents.dollars_chips, {n=G.UIT.R, config={minh = 0.2}, nodes={}}, contents.hand}},
               {n=G.UIT.C, config={minw = 0.45}, nodes={}},
               {n=G.UIT.C, config={align = "cm", id = 'row_round'}, nodes={
                 {n=G.UIT.R, config={align = "cm"}, nodes={
