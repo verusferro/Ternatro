@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import math
+import multiprocessing
 import os
 import time as _time
 from pathlib import Path
@@ -36,6 +37,7 @@ from .game import DATA_DIR
 
 VERSION = 4
 CACHE = Path(os.environ.get("BALATRO_SHADER_CACHE", DATA_DIR / "shaders"))
+_SPAWN = multiprocessing.get_context("spawn")  # bake pools: no fork of the game's threads (and the Windows default)
 f64 = np.float64
 
 # ---------------------------------------------------------------- colours (globals.lua)
@@ -616,7 +618,16 @@ def _bg_plan(name, boss, size, fps=15):
     key = hashlib.sha1(json.dumps([VERSION, "bgtiles-pal", _norm(p), size, N], sort_keys=True, default=str).encode()).hexdigest()[:24]
     return p, N, rects, key, [CACHE / f"bgt-{key}-{n}.webp" for n in range(len(rects))]
 
-def bg_tiles(name, boss, size, fps=15):
+def _bg_chunk(args):
+    w, h, ts, c1, c2, c3, contrast, spin = args
+    out = []
+    for t in ts:
+        r, g, b, _ = _bg_frame(w, h, t, c1, c2, c3, contrast, spin, 0.)
+        out.append((np.stack([r, g, b], -1) * 255 + .5).astype(np.uint8))
+    return out
+
+
+def bg_tiles(name, boss, size, fps=15, workers=1):
     """background.fs at its own grid (size = cells, one px each), cut into a cols x rows mosaic of looping WebPs so
     every tile stays under Tern's per-image ceiling (1024 frames / 64 MiB decoded) at `fps`.  Tern starts an
     animation when the image first draws, on the window's clock: tiles mounted in one render stay in step.
@@ -624,24 +635,39 @@ def bg_tiles(name, boss, size, fps=15):
     its one-cell detail into blocky blur once Tern scales the cells up.  The frames share one palette of <= 256 of
     their own colours (median cut of a sample; at most a few levels off where a state has more), so WebP's lossless
     palette mode keeps them at ~20-45 KiB a frame.
-    -> [(key, bytes, mime, x0, y0, x1, y1)] with the tile's cell rect.  Cached on disk like bake()."""
+    -> [(key, bytes, mime, x0, y0, x1, y1)] with the tile's cell rect.  Cached on disk like bake().  `workers` > 1: the
+    frames are rendered in that many processes and the tiles encoded on threads (~30 s on one core -> a few s)."""
     w, h = size
     p, N, rects, key, files = _bg_plan(name, boss, size, fps)
     if not all(f.exists() for f in files):
         c1, c2, c3 = (_col(p[k]) for k in ("colour_1", "colour_2", "colour_3"))
-        frames = []
-        for i in range(N):
-            r, g, b, _ = _bg_frame(w, h, i * BG_PERIOD / N, c1, c2, c3, float(p.get("contrast", 1.)), float(p.get("spin_amount", 0.)), 0.)
-            frames.append((np.stack([r, g, b], -1) * 255 + .5).astype(np.uint8))
+        ts = [i * BG_PERIOD / N for i in range(N)]
+        chunks = [(w, h, ts[k::workers], c1, c2, c3, float(p.get("contrast", 1.)), float(p.get("spin_amount", 0.))) for k in range(workers)]
+        if workers > 1:
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(workers, mp_context=_SPAWN) as ex:
+                parts = list(ex.map(_bg_chunk, chunks))
+        else:
+            parts = [_bg_chunk(chunks[0])]
+        frames = [parts[i % workers][i // workers] for i in range(N)]  # chunk k holds frames k, k+workers, ...
         pal = Image.fromarray(np.concatenate(frames[::max(1, N // 32)], 0), "RGB").quantize(256, method=Image.Quantize.MEDIANCUT,
                                                                                               dither=Image.Dither.NONE)
         frames = [np.asarray(Image.fromarray(fr, "RGB").quantize(palette=pal, dither=Image.Dither.NONE).convert("RGB")) for fr in frames]
         CACHE.mkdir(parents=True, exist_ok=True)
-        for f, (x0, y0, x1, y1) in zip(files, rects):
+
+        def enc(job):
+            f, (x0, y0, x1, y1) = job
             data, _ = _encode([Image.fromarray(fr[y0:y1, x0:x1], "RGB") for fr in frames], round(BG_PERIOD / N * 1000), 0, True, quality=50)
             tmp = f.with_name(f".{os.getpid()}-{f.name}")
             tmp.write_bytes(data)
             tmp.replace(f)
+        if workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(len(files)) as ex:
+                list(ex.map(enc, zip(files, rects)))
+        else:
+            for job in zip(files, rects):
+                enc(job)
     return [(f"{key}-{n}", f.read_bytes(), "image/webp", *r) for n, (f, r) in enumerate(zip(files, rects))]
 
 
@@ -657,7 +683,7 @@ def bg_prebake(jobs):
     from concurrent.futures import ProcessPoolExecutor
     jobs = [j for j in jobs if not all(f.exists() for f in _bg_plan(*j)[4])]
     if jobs:
-        with ProcessPoolExecutor(max(1, (os.cpu_count() or 2) - 2)) as ex:
+        with ProcessPoolExecutor(max(1, (os.cpu_count() or 2) - 2), mp_context=_SPAWN) as ex:
             list(ex.map(_bake_one, jobs))
 
 

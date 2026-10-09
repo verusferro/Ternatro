@@ -72,7 +72,7 @@ def start_bakes(session, ctx, snap, game, state):
 
     def bg_job(name, boss):
         try:  # the 4th item collects the tiles' blob ids as the loop sends them
-            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, ctx.bg_size), [])
+            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, ctx.bg_size, workers=max(1, (os.cpu_count() or 2) - 2)), [])
         except Exception as e:  # keep the CSS swirl
             state["err"] = repr(e)
 
@@ -208,7 +208,14 @@ def main(continue_run=False, seed=None, speed=2.0):
         ctx.bg_size = round(700 * W / ln), round(700 * H / ln)
         bosses = sorted({"#" + view.boss_colour({"hud": {"blind": {"key": k}}}, game) for k, b in game.G.P_BLINDS.items() if b.boss})
         jobs = [(n, None, ctx.bg_size) for n in ("small", "tarot", "planet", "buffoon", "standard", "spectral", "won")]
-        threading.Thread(target=shaders.bg_prebake, args=(jobs + [("boss", c, ctx.bg_size) for c in bosses],), daemon=True).start()
+
+        def prebake(jobs):  # after the first swirl is up (at most a minute): that one bakes first, on every core
+            for _ in range(120):
+                if ctx.bg is not None:
+                    break
+                time.sleep(.5)
+            shaders.bg_prebake(jobs)
+        threading.Thread(target=prebake, args=(jobs + [("boss", c, ctx.bg_size) for c in bosses],), daemon=True).start()
         ctx.resize(cols, cell)
         last, last_title, running, shown = None, None, True, True
         last_key, last_scene, last_sheets, layout = None, None, {}, None
