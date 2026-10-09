@@ -47,7 +47,7 @@ Tern runs on Windows, the game in WSL2 (Python 3.12, uv there; `ffmpeg` only for
 & "$env:LOCALAPPDATA\Programs\Tern\tern.exe" plugin link '\\wsl.localhost\Ubuntu-24.04\home\<you>\balatro\plugin'
 ```
 
-Tabs then run `<repo>/bin/balatro-tern` in WSL. WSLg sound has about 340 ms of delay; for about 90 ms give the game a small Windows Python environment (found automatically):
+Panes then run `<repo>/bin/balatro-tern` in WSL. WSLg sound has about 340 ms of delay; for about 90 ms give the game a small Windows Python environment (found automatically):
 
 ```powershell
 py -3.12 -m venv "$env:LOCALAPPDATA\balatro-tern\venv"
@@ -56,7 +56,7 @@ py -3.12 -m venv "$env:LOCALAPPDATA\balatro-tern\venv"
 
 ## Play
 
-- Palette: **Balatro: New Run** or **Balatro: Continue** (opens a new tab).
+- Palette: **Balatro: New Run** or **Balatro: Continue** (opens beside the focused pane, in the current tab).
 - Or in any Tern pane: `uv run --project <repo> balatro-tern [--seed SEED] [--continue] [--speed N]` (Linux/macOS/WSL: `<repo>/bin/balatro-tern` works too; Windows: `<repo>\bin\balatro-tern.cmd`).
 
 The first start takes a few seconds longer while sounds are decoded and the shaders are baked. Both are cached in the data folder.
