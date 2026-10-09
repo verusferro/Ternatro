@@ -1,6 +1,6 @@
 """Table view: the game's own layout and motion (see motion.py), plus the shared Ctx / flow `card_node`.
 
-The table is one `.room` box of (2*ROOM_ORIG.x+20) x (2*ROOM_ORIG.y+11.5) game units.  1em in the room = 1 game unit:
+The table is one `.room` box of (2*ROOM_ORIG.x+room_w) x (2*ROOM_ORIG.y+room_h) game units (20 x 11.5, or the tall layout's, see Ctx.resize).  1em in the room = 1 game unit:
 the room's font-size is the fit, computed by Tern from its exact cell metrics (layout_css), so every renderer writes
 game units as em (ctx.U == 1).  Every card is an absolutely positioned node `.mc.m<id>` whose transform comes from the
 game's VT each frame (motion.build_sheet); HUD, screens and overlays are Scene's renderings of the game's own UIBoxes.
@@ -49,6 +49,9 @@ class Ctx:
         self.Upx = 64.0  # ~device px per game unit, only to size raster bakes
         self.cols, self.rows = 120, 40
         self.ox, self.oy = 1.4, 0.66
+        self.room_w, self.room_h = 20, 11.5  # the applied layout's room box, from SC.layout_size
+        self.tall = self.want_tall = False  # HUD below the table (applied / wanted); app switches via SC.set_layout
+        self.cell = None
         self.fr = None  # latest motion.Frame
         self.scene = self.input = None  # set by app
         self.faces = Faces(self)
@@ -61,11 +64,11 @@ class Ctx:
 
     @property
     def W(self):
-        return 2 * self.ox + 20
+        return 2 * self.ox + self.room_w
 
     @property
     def H(self):
-        return 2 * self.oy + 11.5
+        return 2 * self.oy + self.room_h
 
     def redraw(self):
         self.dirty = True
@@ -77,16 +80,30 @@ class Ctx:
             bid = self._bids[png[0]] = self.session.blob(png[1], "image/png")
         return bid
 
+    def apply_layout(self, tall, ox, oy):
+        """The Lua switched to `tall` (SC.set_layout): take its room box and padding."""
+        self.ox, self.oy = ox, oy
+        self.tall = tall
+        self.room_w, self.room_h = (float(v) for v in self.scene.SC.layout_size(tall))
+        self.resize(self.cols, self.cell)
+
     def resize(self, cols, cell):
         """Tern reports the cell size rounded, so the fit itself is CSS (layout_css); here only the pane's size in cells
-        and a px estimate for raster bakes."""
-        self.cols = cols or 120
+        and a px estimate for raster bakes.  Also decides `want_tall` from the pane's width / height: a full 16:9 pane
+        is ~1.8, half the screen ~0.9 (stays wide), ~40% of it ~0.7 (goes tall).  Tall below 0.78, wide again above
+        0.84, so a pane resized around the line doesn't flip back and forth."""
+        self.cols, self.cell = cols or 120, cell
         try:
             self.rows = os.get_terminal_size().lines
         except OSError:
             self.rows = 40
         cw, ch = getattr(cell, "w", None) or 10, getattr(cell, "h", None) or 19
         self.Upx = max(20.0, min(self.cols * cw / self.W, self.rows * ch / self.H))
+        aspect = self.cols * cw / (self.rows * ch)
+        if aspect < 0.78:
+            self.want_tall = True
+        elif aspect > 0.84:
+            self.want_tall = False
         if self.scene:
             self.scene.set_tip_px(self.Upx)
         self.dirty = True

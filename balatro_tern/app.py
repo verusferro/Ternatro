@@ -248,6 +248,9 @@ def main(continue_run=False, seed=None, speed=2.0):
                 snd.handle(e)
             if not shown:
                 continue
+            if ctx.want_tall != ctx.tall and scene.SC.set_layout(ctx.want_tall):  # false while the game is busy: retried next loop
+                ctx.apply_layout(ctx.want_tall, *motion.room_orig())
+                bake_state.pop("bg", None)  # re-bake the swirl for the new W x H; the old one stays until it lands
             fr = motion.read()
             scene.read()
             if fr and fr.flames and last:
@@ -278,8 +281,8 @@ def main(continue_run=False, seed=None, speed=2.0):
                 last = game.snapshot()
             if ctx.dirty or fr is None or fr.key != last_key or scene.key != last_scene:
                 ctx.fr = fr
-                if layout != ctx.fit:
-                    layout = ctx.fit
+                if layout != (ctx.fit, ctx.W, ctx.H):
+                    layout = ctx.fit, ctx.W, ctx.H
                     sf.stylesheet("layout", view.layout_css(ctx))
                 ctx.dirty = False
                 last_key, last_scene = (fr.key if fr else None), scene.key

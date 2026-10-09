@@ -87,11 +87,11 @@ class Motion:
 class Units:
     """Game units -> room CSS lengths in em (1em = one game unit, view.layout_css; U is 1).  `room` is the ROOM
     offset: the shaking one from the frame when given (cards, popups), else ROOM_ORIG (static HUD/UI layout)."""
-    __slots__ = ("U", "ox", "oy", "W", "H", "rx", "ry")
+    __slots__ = ("U", "ox", "oy", "rw", "rh", "W", "H", "rx", "ry")
 
-    def __init__(self, U, ox, oy, room=None):
-        self.U, self.ox, self.oy = U, ox, oy
-        self.W, self.H = 2 * ox + 20, 2 * oy + 11.5
+    def __init__(self, U, ox, oy, rw, rh, room=None):
+        self.U, self.ox, self.oy, self.rw, self.rh = U, ox, oy, rw, rh
+        self.W, self.H = 2 * ox + rw, 2 * oy + rh
         self.rx, self.ry = room if room else (ox, oy)
 
     def x(self, v):  # game x (VT/T space) -> em from the room's left edge
@@ -102,7 +102,7 @@ class Units:
 
 
 def units(ctx, fr=None):
-    return Units(ctx.U, ctx.ox, ctx.oy, fr.room[:2] if fr else None)
+    return Units(ctx.U, ctx.ox, ctx.oy, ctx.room_w, ctx.room_h, fr.room[:2] if fr else None)
 
 
 def drift_css(shake):

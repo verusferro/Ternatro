@@ -348,14 +348,32 @@ function SC.frame()
       elseif not (par.is and (par:is(UIBox) or par:is(UIElement))) then list[#list + 1] = {p, 'c', 'P'} end
     end
   end
+  -- the HUD and the boxes hung on its row_blind keep this order among themselves.  Wide: first in their layer, where
+  -- start_run created them (a rebuilt HUD is the newest box and would cover HUD_blind); tall: last, see below
+  local GROUP = {G.HUD, G.HUD_blind, G.blind_prompt_box, G.SHOP_SIGN}
+  local function group_rank(b) for r = 1, 4 do if GROUP[r] == b then return r end end return 0 end
   -- stable sort by layer (table.sort is not stable: tag with the index)
-  for i, v in ipairs(list) do v[4] = i end
+  for i, v in ipairs(list) do
+    v[4] = i
+    if not SC.tall and group_rank(v[1]) > 0 then v[4] = group_rank(v[1]) - 1e6 end
+  end
   table.sort(list, function(a, b) if a[2] ~= b[2] then return ORDER[a[2]] < ORDER[b[2]] end return a[4] < b[4] end)
-  local S, Fo = {}, {}
-  local i = 1
-  while i <= #list do
+  -- tall: the strip is dumped last (after the nested boxes too), so it covers the panels that hang below the room as the
+  -- screen edge does in the original, and the boxes hung on its row_blind come after it (S order = draw order within a layer)
+  local function tail_rank(b) return SC.tall and group_rank(b) or 0 end
+  local S, Fo, tail = {}, {}, {}
+  local i, flushed = 1, false
+  while true do
+    if i > #list then
+      if flushed or #tail == 0 then break end
+      table.sort(tail, function(a, b) local ra, rb = tail_rank(a[1]), tail_rank(b[1]) return ra < rb or (ra == rb and a[4] < b[4]) end)
+      for _, v in ipairs(tail) do list[#list + 1] = v end
+      flushed = true
+    end
     local b, layer = list[i][1], list[i][2]
-    if list[i][3] == 'P' then
+    if not flushed and tail_rank(b) > 0 then
+      tail[#tail + 1] = list[i]
+    elseif list[i][3] == 'P' then
       dump_emitter(b, layer, S, Fo)
     else
       local nested = dump_box(b, layer, S, Fo, list[i][5])
@@ -556,4 +574,344 @@ end
 for _, name in ipairs{'create_UIBox_game_over', 'create_UIBox_win'} do
   local orig = _G[name]
   _G[name] = function(...) return drop_main_menu(orig(...)) end
+end
+
+-- ===== tall layout =====
+-- A tall/narrow pane moves the HUD sidebar into a horizontal strip BELOW the play field and shifts the play field left
+-- (set_screen_positions derives everything from G.TILE_W), so the table is ~square and the cards render bigger.
+-- Python: SC.layout_size(tall) -> w, h of the room box to show; SC.set_layout(tall) -> applied? (false while busy).
+SC.tall = SC.tall or false
+SC.W0 = SC.W0 or G.TILE_W             -- the wide TILE_W (20)
+local TALL_SHIFT = 4.61               -- wide jokers.x (4.76) - 0.15: the play field then starts 0.15 from the left edge
+local TALL_GAP = 0.4                  -- room bottom -> strip top: the deck's n/52 label hangs to 11.78, plus ~0.1
+-- the dark band runs from the strip top (11.65) to the view bottom (ROOM_ORIG.y 0.7 below layout h): the 3.64 high content
+-- sits in it with the same margin (0.39) above (0.11 of frame padding + TOP_PAD) and below
+local TOP_PAD = 0.25
+local STRIP_H = 3.72
+local BOTTOM_EXT = 3                  -- the strip's dark background continues below the view like the sidebar does above/below
+
+function SC.layout_size(tall)
+  if tall then return SC.W0 - TALL_SHIFT, G.TILE_H + TALL_GAP + STRIP_H end
+  return SC.W0, G.TILE_H
+end
+
+-- create_UIBox_HUD: the game's own body (UI_definitions.lua), only the returned root differs in tall mode
+function create_UIBox_HUD()
+    local scale = 0.4
+    local stake_sprite = get_stake_sprite(G.GAME.stake or 1, 0.5)
+
+    local contents = {}
+
+    local spacing = 0.13
+    local temp_col = G.C.DYN_UI.BOSS_MAIN
+    local temp_col2 = G.C.DYN_UI.BOSS_DARK
+            contents.round = {
+              {n=G.UIT.R, config={align = "cm"}, nodes={
+                {n=G.UIT.C, config={id = 'hud_hands',align = "cm", padding = 0.05, minw = 1.45, colour = temp_col, emboss = 0.05, r = 0.1}, nodes={
+                  {n=G.UIT.R, config={align = "cm", minh = 0.33, maxw = 1.35}, nodes={
+                    {n=G.UIT.T, config={text = localize('k_hud_hands'), scale = 0.85*scale, colour = G.C.UI.TEXT_LIGHT, shadow = true}},
+                  }},
+                  {n=G.UIT.R, config={align = "cm", r = 0.1, minw = 1.2, colour = temp_col2}, nodes={
+                    {n=G.UIT.O, config={object = DynaText({string = {{ref_table = G.GAME.current_round, ref_value = 'hands_left'}}, font = G.LANGUAGES['en-us'].font, colours = {G.C.BLUE},shadow = true, rotate = true, scale = 2*scale}),id = 'hand_UI_count'}},
+                  }}
+                }},
+                {n=G.UIT.C, config={minw = spacing},nodes={}},
+                {n=G.UIT.C, config={align = "cm", padding = 0.05, minw = 1.45, colour = temp_col, emboss = 0.05, r = 0.1}, nodes={
+                  {n=G.UIT.R, config={align = "cm", minh = 0.33, maxw = 1.35}, nodes={
+                    {n=G.UIT.T, config={text = localize('k_hud_discards'), scale = 0.85*scale, colour = G.C.UI.TEXT_LIGHT, shadow = true}},
+                  }},
+                  {n=G.UIT.R, config={align = "cm"}, nodes={
+                    {n=G.UIT.R, config={align = "cm", r = 0.1, minw = 1.2, colour = temp_col2}, nodes={
+                      {n=G.UIT.O, config={object = DynaText({string = {{ref_table = G.GAME.current_round, ref_value = 'discards_left'}}, font = G.LANGUAGES['en-us'].font, colours = {G.C.RED},shadow = true, rotate = true, scale = 2*scale}),id = 'discard_UI_count'}},
+                    }}
+                  }},
+                }},
+              }},
+              {n=G.UIT.R, config={minh = spacing},nodes={}},
+              {n=G.UIT.R, config={align = "cm"}, nodes={
+                {n=G.UIT.C, config={align = "cm", padding = 0.05, minw = 1.45*2 + spacing, minh = 1.15, colour = temp_col, emboss = 0.05, r = 0.1}, nodes={
+                  {n=G.UIT.R, config={align = "cm"}, nodes={
+                    {n=G.UIT.C, config={align = "cm", r = 0.1, minw = 1.28*2+spacing, minh = 1, colour = temp_col2}, nodes={
+                      {n=G.UIT.O, config={object = DynaText({string = {{ref_table = G.GAME, ref_value = 'dollars', prefix = localize('$')}}, maxw = 1.35, colours = {G.C.MONEY}, font = G.LANGUAGES['en-us'].font, shadow = true,spacing = 2, bump = true, scale = 2.2*scale}), id = 'dollar_text_UI'}}
+                  }},
+                  }},
+                }},
+            }},
+            {n=G.UIT.R, config={minh = spacing},nodes={}},
+            {n=G.UIT.R, config={align = "cm"}, nodes={
+              {n=G.UIT.C, config={id = 'hud_ante',align = "cm", padding = 0.05, minw = 1.45, minh = 1, colour = temp_col, emboss = 0.05, r = 0.1}, nodes={
+                {n=G.UIT.R, config={align = "cm", minh = 0.33, maxw = 1.35}, nodes={
+                  {n=G.UIT.T, config={text = localize('k_ante'), scale = 0.85*scale, colour = G.C.UI.TEXT_LIGHT, shadow = true}},
+                }},
+                {n=G.UIT.R, config={align = "cm", r = 0.1, minw = 1.2, colour = temp_col2}, nodes={
+                  {n=G.UIT.O, config={object = DynaText({string = {{ref_table = G.GAME.round_resets, ref_value = 'ante'}}, colours = {G.C.IMPORTANT},shadow = true, font = G.LANGUAGES['en-us'].font, scale = 2*scale}),id = 'ante_UI_count'}},
+                  {n=G.UIT.T, config={text = " ", scale = 0.3*scale}},
+                  {n=G.UIT.T, config={text = "/ ", scale = 0.7*scale, colour = G.C.WHITE, shadow = true}},
+                  {n=G.UIT.T, config={ref_table = G.GAME, ref_value='win_ante', scale = scale, colour = G.C.WHITE, shadow = true}}
+                }},
+              }},
+              {n=G.UIT.C, config={minw = spacing},nodes={}},
+              {n=G.UIT.C, config={align = "cm", padding = 0.05, minw = 1.45, minh = 1, colour = temp_col, emboss = 0.05, r = 0.1}, nodes={
+                {n=G.UIT.R, config={align = "cm", maxw = 1.35}, nodes={
+                  {n=G.UIT.T, config={text = localize('k_round'), minh = 0.33, scale = 0.85*scale, colour = G.C.UI.TEXT_LIGHT, shadow = true}},
+                }},
+                {n=G.UIT.R, config={align = "cm", r = 0.1, minw = 1.2, colour = temp_col2, id = 'row_round_text'}, nodes={
+                  {n=G.UIT.O, config={object = DynaText({string = {{ref_table = G.GAME, ref_value = 'round'}}, colours = {G.C.IMPORTANT},shadow = true, scale = 2*scale}),id = 'round_UI_count'}},
+                }},
+              }},
+            }},
+    }
+
+    contents.hand =
+        {n=G.UIT.R, config={align = "cm", id = 'hand_text_area', colour = darken(G.C.BLACK, 0.1), r = 0.1, emboss = 0.05, padding = 0.03}, nodes={
+            {n=G.UIT.C, config={align = "cm"}, nodes={
+              {n=G.UIT.R, config={align = "cm", minh = 1.1}, nodes={
+                {n=G.UIT.O, config={id = 'hand_name', func = 'hand_text_UI_set',object = DynaText({string = {{ref_table = G.GAME.current_round.current_hand, ref_value = "handname_text"}}, colours = {G.C.UI.TEXT_LIGHT}, shadow = true, float = true, scale = scale*1.4})}},
+                {n=G.UIT.O, config={id = 'hand_chip_total', func = 'hand_chip_total_UI_set',object = DynaText({string = {{ref_table = G.GAME.current_round.current_hand, ref_value = "chip_total_text"}}, colours = {G.C.UI.TEXT_LIGHT}, shadow = true, float = true, scale = scale*1.4})}},
+                {n=G.UIT.T, config={ref_table = G.GAME.current_round.current_hand, ref_value='hand_level', scale = scale, colour = G.C.UI.TEXT_LIGHT, id = 'hand_level', shadow = true}}
+              }},
+              {n=G.UIT.R, config={align = "cm", minh = 1, padding = 0.1}, nodes={
+                {n=G.UIT.C, config={align = "cr", minw = 2, minh =1, r = 0.1,colour = G.C.UI_CHIPS, id = 'hand_chip_area', emboss = 0.05}, nodes={
+                    {n=G.UIT.O, config={func = 'flame_handler',no_role = true, id = 'flame_chips', object = Moveable(0,0,0,0), w = 0, h = 0}},
+                    {n=G.UIT.O, config={id = 'hand_chips', func = 'hand_chip_UI_set',object = DynaText({string = {{ref_table = G.GAME.current_round.current_hand, ref_value = "chip_text"}}, colours = {G.C.UI.TEXT_LIGHT}, font = G.LANGUAGES['en-us'].font, shadow = true, float = true, scale = scale*2.3})}},
+                    {n=G.UIT.B, config={w=0.1,h=0.1}},
+                }},
+                {n=G.UIT.C, config={align = "cm"}, nodes={
+                  {n=G.UIT.T, config={text = "X", lang = G.LANGUAGES['en-us'], scale = scale*2, colour = G.C.UI_MULT, shadow = true}},
+                }},
+                {n=G.UIT.C, config={align = "cl", minw = 2, minh=1, r = 0.1,colour = G.C.UI_MULT, id = 'hand_mult_area', emboss = 0.05}, nodes={
+                  {n=G.UIT.O, config={func = 'flame_handler',no_role = true, id = 'flame_mult', object = Moveable(0,0,0,0), w = 0, h = 0}},
+                  {n=G.UIT.B, config={w=0.1,h=0.1}},
+                  {n=G.UIT.O, config={id = 'hand_mult', func = 'hand_mult_UI_set',object = DynaText({string = {{ref_table = G.GAME.current_round.current_hand, ref_value = "mult_text"}}, colours = {G.C.UI.TEXT_LIGHT}, font = G.LANGUAGES['en-us'].font, shadow = true, float = true, scale = scale*2.3})}},
+                }}
+              }}
+            }}
+          }}
+    contents.dollars_chips = {n=G.UIT.R, config={align = "cm",r=0.1, padding = 0,colour = G.C.DYN_UI.BOSS_MAIN, emboss = 0.05, id = 'row_dollars_chips'}, nodes={
+      {n=G.UIT.C, config={align = "cm", padding = 0.1}, nodes={
+        {n=G.UIT.C, config={align = "cm", minw = 1.3}, nodes={
+          {n=G.UIT.R, config={align = "cm", padding = 0, maxw = 1.3}, nodes={
+            {n=G.UIT.T, config={text = localize('k_round'), scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+          }},
+          {n=G.UIT.R, config={align = "cm", padding = 0, maxw = 1.3}, nodes={
+            {n=G.UIT.T, config={text =localize('k_lower_score'), scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+          }}
+        }},
+        {n=G.UIT.C, config={align = "cm", minw = 3.3, minh = 0.7, r = 0.1, colour = G.C.DYN_UI.BOSS_DARK}, nodes={
+          {n=G.UIT.O, config={w=0.5,h=0.5 , object = stake_sprite, hover = true, can_collide = false}},
+          {n=G.UIT.B, config={w=0.1,h=0.1}},
+          {n=G.UIT.T, config={ref_table = G.GAME, ref_value = 'chips_text', lang = G.LANGUAGES['en-us'], scale = 0.85, colour = G.C.WHITE, id = 'chip_UI_count', func = 'chip_UI_set', shadow = true}}
+        }}
+      }}
+    }}
+
+    contents.buttons = {
+      {n=G.UIT.C, config={align = "cm", r=0.1, colour = G.C.CLEAR, shadow = true, id = 'button_area', padding = 0.2}, nodes={
+          {n=G.UIT.R, config={id = 'run_info_button', align = "cm", minh = 1.75, minw = 1.5,padding = 0.05, r = 0.1, hover = true, colour = G.C.RED, button = "run_info", shadow = true}, nodes={
+            {n=G.UIT.R, config={align = "cm", padding = 0, maxw = 1.4}, nodes={
+              {n=G.UIT.T, config={text = localize('b_run_info_1'), scale = 1.2*scale, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+            }},
+            {n=G.UIT.R, config={align = "cm", padding = 0, maxw = 1.4}, nodes={
+              {n=G.UIT.T, config={text = localize('b_run_info_2'), scale = 1*scale, colour = G.C.UI.TEXT_LIGHT, shadow = true, focus_args = {button = G.F_GUIDE and 'guide' or 'back', orientation = 'bm'}, func = 'set_button_pip'}}
+            }}
+          }},
+          {n=G.UIT.R, config={align = "cm", minh = 1.75, minw = 1.5,padding = 0.05, r = 0.1, hover = true, colour = G.C.ORANGE, button = "options", shadow = true}, nodes={
+            {n=G.UIT.C, config={align = "cm", maxw = 1.4, focus_args = {button = 'start', orientation = 'bm'}, func = 'set_button_pip'}, nodes={
+              {n=G.UIT.T, config={text = localize('b_options'), scale = scale, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+            }},
+          }}
+        }}
+    }
+
+    if SC.tall then
+      -- squish (tall only): everything must fit the HUD_blind box (3.64 high), the tallest column
+      local btn = contents.buttons[1]
+      btn.config.padding = 0.1
+      btn.nodes[1].config.minh, btn.nodes[2].config.minh = 1.3, 1.3
+      contents.round[2].config.minh, contents.round[4].config.minh = 0.06, 0.06
+      local dollars = contents.round[3].nodes[1]
+      dollars.config.minh = 0.9
+      dollars.nodes[1].nodes[1].config.minh = 0.75
+      -- [row_blind] [dollars_chips over hand] [row_round]; the dark rows are far wider than the view and the bottom row
+      -- far taller, so no edge shows left, right or below (like the sidebar's minh = 30)
+      return {n=G.UIT.ROOT, config = {align = "cm", padding = 0.03, colour = G.C.UI.TRANSPARENT_DARK}, nodes={
+        {n=G.UIT.R, config = {align = "cm", padding= 0.05, colour = G.C.DYN_UI.MAIN, r=0.1, minw = 60}, nodes={
+          {n=G.UIT.R, config={align = "cm", colour = G.C.DYN_UI.BOSS_DARK, r=0.1, minw = 60, padding = 0.03}, nodes={
+            {n=G.UIT.R, config={minh = TOP_PAD}, nodes={}},
+            {n=G.UIT.R, config={align = "cm"}, nodes={
+              {n=G.UIT.C, config={align = "cm"}, nodes={
+                {n=G.UIT.R, config={align = "cm", id = 'row_blind', minw = 4.93, minh = 3.64}, nodes={}},
+              }},
+              {n=G.UIT.C, config={align = "cm"}, nodes={contents.dollars_chips, contents.hand}},
+              {n=G.UIT.C, config={align = "cm", id = 'row_round'}, nodes={
+                {n=G.UIT.R, config={align = "cm"}, nodes={
+                  {n=G.UIT.C, config={align = "cm"}, nodes=contents.buttons},
+                  {n=G.UIT.C, config={align = "cm"}, nodes=contents.round}
+                }}
+              }},
+            }},
+            {n=G.UIT.R, config={minh = BOTTOM_EXT}, nodes={}},
+          }}
+        }}
+      }}
+    end
+
+    return {n=G.UIT.ROOT, config = {align = "cm", padding = 0.03, colour = G.C.UI.TRANSPARENT_DARK}, nodes={
+      {n=G.UIT.R, config = {align = "cm", padding= 0.05, colour = G.C.DYN_UI.MAIN, r=0.1}, nodes={
+        {n=G.UIT.R, config={align = "cm", colour = G.C.DYN_UI.BOSS_DARK, r=0.1, minh = 30, padding = 0.08}, nodes={
+          {n=G.UIT.R, config={align = "cm", minh = 0.3}, nodes={}},
+          {n=G.UIT.R, config={align = "cm", id = 'row_blind', minw = 1, minh = 3.75}, nodes={}},
+          contents.dollars_chips,
+          contents.hand,
+          {n=G.UIT.R, config={align = "cm", id = 'row_round'}, nodes={
+            {n=G.UIT.C, config={align = "cm"}, nodes=contents.buttons},
+            {n=G.UIT.C, config={align = "cm"}, nodes=contents.round}
+          }},
+        }}
+      }}
+    }}
+end
+
+-- Game:start_run's HUD (and the refs it keeps into it) for the current mode
+local function hud_refs()
+  G.hand_text_area = {
+    chips = G.HUD:get_UIE_by_ID('hand_chips'),
+    mult = G.HUD:get_UIE_by_ID('hand_mult'),
+    ante = G.HUD:get_UIE_by_ID('ante_UI_count'),
+    round = G.HUD:get_UIE_by_ID('round_UI_count'),
+    chip_total = G.HUD:get_UIE_by_ID('hand_chip_total'),
+    handname = G.HUD:get_UIE_by_ID('hand_name'),
+    hand_level = G.HUD:get_UIE_by_ID('hand_level'),
+    game_chips = G.HUD:get_UIE_by_ID('chip_UI_count'),
+    blind_chips = G.HUD_blind:get_UIE_by_ID('HUD_blind_count'),
+    blind_spacer = G.HUD:get_UIE_by_ID('blind_spacer')
+  }
+end
+
+-- The game hides the boxes hung on row_blind (HUD_blind, the blind prompt, the shop sign) with offset.y -10 / -15: above
+-- the sidebar, off-screen.  With the strip at the bottom that is inside the play field, so in tall mode a hide offset
+-- (y <= -5) reads as +y: below the strip.  The game only writes these offsets, never reads them back.
+-- `box.alignment.offset.y` as the engine reads it: read(stored y); the game only writes these offsets
+local function offset_as(box, read)
+  local y = box.alignment.offset.y
+  box.alignment.offset = setmetatable({x = box.alignment.offset.x}, {
+    __index = function(_, k) if k == 'y' then return read(y) end end,
+    __newindex = function(t, k, v) if k == 'y' then y = v else rawset(t, k, v) end end})
+end
+
+local function hide_below(box)
+  if not box then return end
+  offset_as(box, function(y) return SC.tall and y <= -5 and -y or y end)
+  if SC.tall then box:align_to_major(); box:hard_set_VT(); box:recalculate() end  -- recalculate: the elements follow the box
+end
+
+-- Full-screen overlays (G.FUNCS.overlay_menu) centre on ROOM_ATTACH, the 11.5 high room: tall, the view is taller
+local overlay_menu = SC.overlay_menu or G.FUNCS.overlay_menu
+SC.overlay_menu = overlay_menu
+function G.FUNCS.overlay_menu(args)
+  overlay_menu(args)
+  if G.OVERLAY_MENU then offset_as(G.OVERLAY_MENU, function(y) return SC.tall and y + (select(2, SC.layout_size(true)) - G.TILE_H) / 2 or y end) end
+end
+
+local function rebuild_hud()
+  local old, hung = G.HUD, {}
+  for _, b in ipairs(G.I.UIBOX) do
+    local m = b ~= old and b.role and b.role.major
+    if m and m.UIBox == old then hung[#hung + 1] = {b, m.config.id, b.role.xy_bond} end
+  end
+  old:remove()
+  G.HUD = UIBox{
+    definition = create_UIBox_HUD(),
+    config = SC.tall and {align = 'bm', offset = {x = 0, y = TALL_GAP}, major = G.ROOM_ATTACH}
+      or {align = 'cli', offset = {x = -0.7, y = 0}, major = G.ROOM_ATTACH}}
+  for _, h in ipairs(hung) do
+    local b, new = h[1], G.HUD:get_UIE_by_ID(h[2])
+    if new then
+      b:set_alignment{major = new, bond = h[3]}
+      b.alignment.prev_offset = {}
+      b:align_to_major()
+      b:hard_set_VT()
+      b:recalculate()
+    end
+  end
+  hud_refs()
+end
+
+-- TILE_W, the room's size and the padding of the current mode.  Game:prep_stage (start_run) runs love.resize, which centres
+-- the room for G.TILE_W in the window: tall must put its own padding back
+local function apply_room()
+  SC.wide = SC.wide or {x = G.ROOM_ORIG.x, y = G.ROOM_ORIG.y, r = G.ROOM_ORIG.r}  -- the game's own wide padding
+  G.TILE_W = SC.tall and SC.W0 - TALL_SHIFT or SC.W0
+  G.ROOM.T.w, G.ROOM_ATTACH.T.w = G.TILE_W, G.TILE_W
+  -- tall: the game's own ROOM_PADDING (1 x 0.7); the skip tags hang 0.7 past the room's right edge
+  local p = SC.tall and {x = G.ROOM_PADDING_W, y = G.ROOM_PADDING_H, r = SC.wide.r} or SC.wide
+  G.ROOM.T.x, G.ROOM.T.y = p.x, p.y
+  G.ROOM_ORIG = {x = p.x, y = p.y, r = p.r}
+  G.ROOM_ATTACH:hard_set_VT()
+  -- Controller:get_cursor_collision ignores a cursor more than DRAW_HASH_BUFF (2) below the room: the strip is 4.0 below
+  G.DRAW_HASH_BUFF = SC.tall and 4.5 or 2
+end
+
+local start_run = SC.start_run or Game.start_run
+SC.start_run = start_run
+function Game:start_run(args)
+  start_run(self, args)
+  hide_below(G.HUD_blind)
+  if SC.tall then apply_room(); rebuild_hud() end
+end
+
+for _, w in ipairs{{_G, 'create_UIBox_blind_select', 'blind_prompt_box'}, {G.UIDEF, 'shop', 'SHOP_SIGN'}} do
+  local t, name, box = w[1], w[2], w[3]
+  local orig = SC['orig_' .. name] or t[name]
+  SC['orig_' .. name] = orig
+  t[name] = function(...)
+    local r = orig(...)
+    hide_below(G[box])
+    return r
+  end
+end
+
+function SC.set_layout(tall)
+  tall = tall and true or false
+  if tall == SC.tall then return true end
+  if BT.busy() then return false end
+  SC.wide = SC.wide or {x = G.ROOM_ORIG.x, y = G.ROOM_ORIG.y, r = G.ROOM_ORIG.r}
+  SC.tall = tall
+  apply_room()
+  if G.HUD then
+    rebuild_hud()
+    set_screen_positions()
+    -- the areas' backing boxes (children.area_uibox) keep the offset they were aligned with: CardArea:draw rebuilds them in place
+    for _, a in ipairs(G.I.CARDAREA) do
+      local b = a.children.area_uibox
+      if b then b:remove(); a.children.area_uibox = nil end
+    end
+  end
+  return true
+end
+
+-- Deck view (Full Deck / Remaining tabs): wide it is one row [info | rank column | 4 suit areas] ~20 wide and 7.3 high.
+-- Tall: the suit areas on top; under them the deck panel, the tallies (4 suits in one row) and the rank column (split
+-- in two) side by side.  Rearranges the game's own nodes; only paddings shrink, the cards keep their scale.
+SC.view_deck = SC.view_deck or G.UIDEF.view_deck
+function G.UIDEF.view_deck(...)
+  local t = SC.view_deck(...)
+  if not SC.tall then return t end
+  local row = t.nodes[2]                 -- {info + ranks panel, spacer, suit areas}
+  local left, areas = row.nodes[1], row.nodes[3]
+  local deck, tallies = left.nodes[1].nodes[1], left.nodes[1].nodes[2]
+  local suits = tallies.nodes[3].nodes   -- {Spades, Hearts}; Clubs, Diamonds are the next row
+  suits[3], suits[4] = tallies.nodes[4].nodes[1], tallies.nodes[4].nodes[2]
+  tallies.nodes[4] = nil
+  local ranks = left.nodes[2].nodes      -- 13 rows, A .. 2
+  left.nodes = {
+    {n = G.UIT.C, config = {align = "cm", padding = 0.1}, nodes = {deck}},
+    {n = G.UIT.C, config = {align = "cm", padding = 0.1}, nodes = {tallies}},
+    {n = G.UIT.C, config = {align = "cm"}, nodes = {unpack(ranks, 1, 7)}},
+    {n = G.UIT.C, config = {align = "cm"}, nodes = {unpack(ranks, 8, 13)}},
+    {n = G.UIT.B, config = {w = 0.1, h = 0.1}}}
+  t.nodes[3].config.minh = 0.3           -- the notes row
+  t.nodes = {t.nodes[1], {n = G.UIT.R, config = {align = "cm"}, nodes = {areas}},
+    {n = G.UIT.R, config = {align = "cm", minh = 0.1}, nodes = {}}, {n = G.UIT.R, config = {align = "cm"}, nodes = {left}}, t.nodes[3]}
+  return t
 end

@@ -507,7 +507,7 @@ class Scene:
         if self._sent.get("scshake") != shake:
             self._sent["scshake"] = shake
             sf.stylesheet("scshake", shake)
-        u = Units(u.U, u.ox, u.oy)
+        u = Units(u.U, u.ox, u.oy, u.rw, u.rh)
         sheets = {}
         for b in self.boxes:  # first: el_css fills _kf
             css = [self._el_css(e, u) for e in b.els]
