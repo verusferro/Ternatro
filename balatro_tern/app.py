@@ -57,8 +57,8 @@ def render_all(sf, snap, game, ctx):
 
 def bg_css(ctx):
     """Placement of the swirl mosaic: tiles in percent of `.bgm`, which is the stage's height and at least its width,
-    at least as wide as the bake's aspect wants (centred, the sides cropped).  The stage is the pane's full width, so an
-    exact-size bake fills it as before; a wide bake on the tall stage covers it.  Tern paints every raster image with a
+    at least as wide as the bake's aspect wants (centred, the sides cropped).  The swirl is only baked for the wide
+    stage (the pane's full width): there it fills, on the tall stage it covers, sides cropped.  Tern paints every raster image with a
     6px corner radius and a faint ring, so tiles overlap by 8px and the mosaic bleeds 8px past the stage's edges."""
     W, H = ctx.bg_rects[-1][5], ctx.bg_rects[-1][6]
     return (f".bgm{{width:max(calc(100% + 16px),{ctx.H * W / H:.4f}em)}}" +
@@ -71,19 +71,11 @@ def start_bakes(session, ctx, snap, game, state):
     import threading
 
     def bg_job(name, boss):
-        try:
-            def size(W, H):  # background.fs's grid: 700 cells along the diagonal, one px per cell
-                ln = (W ** 2 + H ** 2) ** .5
-                return round(700 * W / ln), round(700 * H / ln)
-            exact = size(ctx.W, ctx.H)
+        try:  # background.fs's grid: 700 cells along the wide stage's diagonal, one px per cell; the tall stage shows it cropped
+            W, H = ctx.wide
+            ln = (W ** 2 + H ** 2) ** .5
             # the 4th item collects the tiles' blob ids as the loop sends them
-            tiles = shaders.bg_tiles(name, boss, exact, cached_only=True)
-            if tiles is None:
-                wide = shaders.bg_tiles(name, boss, size(*ctx.wide), cached_only=True)  # shown at once, covering, until the exact bake lands
-                if wide:
-                    ctx.bg_next = (name, boss, wide, [])
-                tiles = shaders.bg_tiles(name, boss, exact)
-            ctx.bg_next = (name, boss, tiles, [])
+            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, (round(700 * W / ln), round(700 * H / ln))), [])
         except Exception as e:  # keep the CSS swirl
             state["err"] = repr(e)
 
@@ -214,7 +206,7 @@ def main(continue_run=False, seed=None, speed=2.0):
             game.new_run(seed)
         debug(game, scene)
         ctx.ox, ctx.oy = motion.room_orig()
-        ctx.wide = ctx.W, ctx.H  # the wide layout's stage: its cached swirl covers the tall stage while the exact bake runs
+        ctx.wide = ctx.W, ctx.H  # the wide layout's stage: the swirl is baked for it, the tall stage shows it cropped (bg_css)
         ctx.resize(cols, cell)
         last, last_title, running, shown = None, None, True, True
         last_key, last_scene, last_sheets, layout = None, None, {}, None
@@ -270,7 +262,6 @@ def main(continue_run=False, seed=None, speed=2.0):
                 continue
             if ctx.want_tall != ctx.tall and scene.SC.set_layout(ctx.want_tall):  # false while the game is busy: retried next loop
                 ctx.apply_layout(ctx.want_tall, *motion.room_orig())
-                bake_state.pop("bg", None)  # re-bake the swirl for the new W x H; the old one stays until it lands
             fr = motion.read()
             scene.read()
             if fr and fr.flames and last:

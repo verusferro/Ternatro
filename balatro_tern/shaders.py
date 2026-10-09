@@ -598,7 +598,7 @@ def bg_bake(name, boss=None, **kw):
     return bake("background", bg_set(name, boss), **kw)
 
 
-def bg_tiles(name, boss, size, fps=15, cached_only=False):
+def bg_tiles(name, boss, size, fps=15):
     """background.fs at its own grid (size = cells, one px each), cut into a cols x rows mosaic of looping WebPs so
     every tile stays under Tern's per-image ceiling (1024 frames / 64 MiB decoded) at `fps`.  Tern starts an
     animation when the image first draws, on the window's clock: tiles mounted in one render stay in step.
@@ -606,8 +606,7 @@ def bg_tiles(name, boss, size, fps=15, cached_only=False):
     its one-cell detail into blocky blur once Tern scales the cells up.  The frames share one palette of <= 256 of
     their own colours (median cut of a sample; at most a few levels off where a state has more), so WebP's lossless
     palette mode keeps them at ~20-45 KiB a frame.
-    -> [(key, bytes, mime, x0, y0, x1, y1)] with the tile's cell rect.  Cached on disk like bake(); `cached_only`: None
-    instead of baking when a tile file is missing."""
+    -> [(key, bytes, mime, x0, y0, x1, y1)] with the tile's cell rect.  Cached on disk like bake()."""
     w, h = size
     p = bg_set(name, boss)
     N = min(1024, round(BG_PERIOD * fps))
@@ -623,8 +622,6 @@ def bg_tiles(name, boss, size, fps=15, cached_only=False):
     rects = [(xs[i], ys[j], xs[i + 1], ys[j + 1]) for j in range(rows) for i in range(cols)]
     key = hashlib.sha1(json.dumps([VERSION, "bgtiles-pal", _norm(p), size, N], sort_keys=True, default=str).encode()).hexdigest()[:24]
     files = [CACHE / f"bgt-{key}-{n}.webp" for n in range(len(rects))]
-    if cached_only and not all(f.exists() for f in files):
-        return None
     if not all(f.exists() for f in files):
         c1, c2, c3 = (_col(p[k]) for k in ("colour_1", "colour_2", "colour_3"))
         frames = []
