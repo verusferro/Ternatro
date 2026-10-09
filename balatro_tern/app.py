@@ -36,11 +36,11 @@ def title(snap):
 
 def render_all(sf, snap, game, ctx):
     """Rebuild the node tree: backdrop + the room (Scene boxes, cards, popups)."""
-    if ctx.bg:  # background.fs mosaic (shaders.bg_tiles): placed by the `bgtiles` sheet, mounted together so they animate in step
-        tiles = [ui.html.div(ui.image(b, alt=""), class_=f"bgt bgt{i}", key=f"bgt{i}") for i, b in enumerate(ctx.bg)]
-        swirl = ui.html.div(ui.html.div(*tiles, class_="bgm", key="bgm"), class_="swirl", key="swirl")
-    else:
-        swirl = ui.html.div(class_="swirl", key="swirl")
+    # background.fs mosaics (shaders.bg_tiles), placed by the `bgtiles` sheet: the current state's, plus the likely next
+    # ones hidden (.bgpre), already decoded by Tern so a state change shows its swirl at once (start_bakes)
+    swirl = ui.html.div(*[ui.html.div(*[ui.html.div(ui.image(b, alt=""), class_=f"bgt bgt{i}", key=f"bgt{i}") for i, b in enumerate(ids)],
+                                      class_="bgm" if st == ctx.bg_cur else "bgm bgpre", key=f"bgm-{st[0]}{st[1] or ''}")
+                          for st, ids in ctx.bgs.items()], class_="swirl", key="swirl")
     stage = ui.html.div(swirl, ui.html.div(view.table(snap, game, ctx), class_="fg", key="fg"), class_="stage", key="stage")
     if ctx.bg:
         css = bg_css(ctx)
@@ -67,34 +67,39 @@ def bg_css(ctx):
 
 
 def start_bakes(session, ctx, snap, game, state):
-    """Background-thread Shaders bakes: swirl per state, flame loops per (kind, level). Results land in ctx (picked up next loop)."""
-    import threading
+    """Swirls: the current state's (baked on every core if it isn't on disk yet) and the likely next ones (view.bg_preds,
+    only when on disk) are loaded on threads, sent one tile per loop, and kept in ctx.bgs; others are dropped."""
+    want = view.bg_name(snap, game)
+    keep = [want] + [s for s in view.bg_preds(snap, game) if s != want]
+    jobs = state.setdefault("jobs", {})  # state -> [tiles or None, blob ids sent]
+    for st in [s for s in jobs if s not in keep and jobs[s][0]]:  # loaded for a prediction that no longer holds
+        del jobs[st]
 
-    def bg_job(name, boss):
-        try:  # the 4th item collects the tiles' blob ids as the loop sends them
-            ctx.bg_next = (name, boss, shaders.bg_tiles(name, boss, ctx.bg_size, workers=max(1, (os.cpu_count() or 2) - 2)), [])
+    def load(st):
+        try:
+            jobs[st][0] = shaders.bg_tiles(*st, ctx.bg_size, workers=max(1, (os.cpu_count() or 2) - 2))
         except Exception as e:  # keep the CSS swirl
             state["err"] = repr(e)
-
-    want = view.bg_name(snap, game)
-    if want != state.get("bg") and not state.get("bg_busy"):
-        state["bg"] = want
-        state["bg_busy"] = True
-
-        def run():
-            bg_job(*want)
-            state["bg_busy"] = False
-        threading.Thread(target=run, daemon=True).start()
-    nxt = getattr(ctx, "bg_next", None)
-    if nxt is not None and (nxt[0], nxt[1]) == state.get("bg"):
-        tiles, ids = nxt[2], nxt[3]
-        if len(ids) < len(tiles):  # one tile per loop: a state's tiles are megabytes, at once they would stall a frame
-            t = tiles[len(ids)]
-            ids.append(session.blob(t[1], t[2]))
-            return
-        if ctx.bg_next is nxt:
-            ctx.bg_next = None
-        ctx.bg, ctx.bg_rects = ids, tiles
+    for st in keep:  # predictions not baked yet are skipped (bg_prebake bakes them)
+        if st not in ctx.bgs and st not in jobs and (st == want or shaders.bg_cached(*st, ctx.bg_size)):
+            jobs[st] = [None, []]
+            threading.Thread(target=load, args=(st,), daemon=True).start()
+    for st in keep:  # one tile per loop, the current state's first: a state's tiles are megabytes, at once they would stall a frame
+        job = jobs.get(st)
+        if job and job[0]:
+            tiles, ids = job
+            if len(ids) < len(tiles):
+                t = tiles[len(ids)]
+                ids.append(session.blob(t[1], t[2]))
+                break
+            del jobs[st]
+            ctx.bgs[st], ctx.bg_rects = ids, tiles
+            ctx.dirty = True
+    if want in ctx.bgs and ctx.bg_cur != want:
+        ctx.bg_cur, ctx.bg = want, ctx.bgs[want]
+        ctx.dirty = True
+    for st in [s for s in ctx.bgs if s not in keep and s != ctx.bg_cur]:  # the shown one stays until its successor is up
+        del ctx.bgs[st]
         ctx.dirty = True
 
 

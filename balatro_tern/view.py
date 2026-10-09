@@ -39,6 +39,25 @@ def bg_name(snap, game):
     return "small", None
 
 
+PACK_BG = {"p_arcana": "tarot", "p_celestial": "planet", "p_spectral": "spectral", "p_standard": "standard", "p_buffoon": "buffoon"}
+
+
+def bg_preds(snap, game):
+    """Swirl states likely next, kept loaded (hidden) in Tern so they show at once.  A loaded swirl costs Tern ~300 MB
+    (359 decoded frames), so only the next screen's: the shop's packs in the shop, the boss at its blind select;
+    `small` (blinds and shop) always."""
+    out = [("small", None)]
+    if snap["state"] == "SHOP":
+        for c in (snap["areas"].get("shop_booster") or {}).get("cards", []):
+            n = PACK_BG.get(c["key"].rsplit("_", 2)[0])
+            if n and (n, None) not in out:
+                out.append((n, None))
+    elif snap["state"] == "BLIND_SELECT" and game.G.GAME.blind_on_deck == "Boss":
+        boss = game.G.GAME.round_resets.blind_choices.Boss
+        out.append(("boss", "#" + boss_colour({"hud": {"blind": {"key": boss}}}, game)))
+    return out
+
+
 class Ctx:
     """Shared state: blob cache, redraw flag, unit scale U, latest frame, baked images, mute flags."""
 
@@ -55,7 +74,8 @@ class Ctx:
         self.fr = None  # latest motion.Frame
         self.scene = self.input = None  # set by app
         self.faces = Faces(self)
-        self.bg = None  # (key, blob id, mime) of the baked swirl, once ready
+        self.bg = None  # blob ids of the shown swirl mosaic, once ready
+        self.bgs, self.bg_cur, self.bg_rects = {}, None, None  # swirl state -> its mosaic's blob ids (shown + preloaded); the shown state; tile rects
         self.flames = {}  # 'c' | 'm' -> (level, blob id)
         self.mute = (False, False)  # (music, sfx) muted; set by app each loop
         self.toggle = lambda kind: None  # app: toggle "music"/"sfx", persist

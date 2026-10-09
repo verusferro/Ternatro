@@ -618,6 +618,10 @@ def _bg_plan(name, boss, size, fps=15):
     key = hashlib.sha1(json.dumps([VERSION, "bgtiles-pal", _norm(p), size, N], sort_keys=True, default=str).encode()).hexdigest()[:24]
     return p, N, rects, key, [CACHE / f"bgt-{key}-{n}.webp" for n in range(len(rects))]
 
+def bg_cached(name, boss, size, fps=15):
+    return all(f.exists() for f in _bg_plan(name, boss, size, fps)[4])
+
+
 def _bg_chunk(args):
     w, h, ts, c1, c2, c3, contrast, spin = args
     out = []
