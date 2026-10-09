@@ -732,6 +732,7 @@ function create_UIBox_HUD()
       local dollars = contents.round[3].nodes[1]
       dollars.config.minh = 0.9
       dollars.nodes[1].nodes[1].config.minh = 0.75
+      contents.round[1].nodes[2].config.minw, contents.round[5].nodes[2].config.minw = 0.35, 0.35  -- gaps between the stat boxes
       -- [row_blind] [dollars_chips over hand] [row_round]; the dark rows are far wider than the view and the bottom row
       -- far taller, so no edge shows left, right or below (like the sidebar's minh = 30)
       return {n=G.UIT.ROOT, config = {align = "cm", padding = 0.03, colour = G.C.UI.TRANSPARENT_DARK}, nodes={
@@ -742,10 +743,13 @@ function create_UIBox_HUD()
               {n=G.UIT.C, config={align = "cm"}, nodes={
                 {n=G.UIT.R, config={align = "cm", id = 'row_blind', minw = 4.93, minh = 3.64}, nodes={}},
               }},
+              {n=G.UIT.C, config={minw = 0.45}, nodes={}},
               {n=G.UIT.C, config={align = "cm"}, nodes={contents.dollars_chips, contents.hand}},
+              {n=G.UIT.C, config={minw = 0.45}, nodes={}},
               {n=G.UIT.C, config={align = "cm", id = 'row_round'}, nodes={
                 {n=G.UIT.R, config={align = "cm"}, nodes={
                   {n=G.UIT.C, config={align = "cm"}, nodes=contents.buttons},
+                  {n=G.UIT.C, config={minw = 0.25}, nodes={}},
                   {n=G.UIT.C, config={align = "cm"}, nodes=contents.round}
                 }}
               }},
